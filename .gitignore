@@ -1,0 +1,19 @@
+# macOS / editors
+.DS_Store
+.idea/
+.vscode/
+
+# Bridge
+bridge/config.json
+bridge/node_modules/
+bridge/coverage/
+
+# ESP-IDF
+firmware/build/
+firmware/sdkconfig
+firmware/sdkconfig.old
+firmware/dependencies.lock
+firmware/managed_components/
+
+# Logs
+*.log

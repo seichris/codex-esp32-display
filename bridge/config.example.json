@@ -1,0 +1,10 @@
+{
+  "host": "0.0.0.0",
+  "port": 5180,
+  "token": "replace-with-a-long-random-token",
+  "pollIntervalMs": 2000,
+  "maxThreads": 300,
+  "codexBin": "codex",
+  "codexHome": "~/.codex",
+  "maxItems": 30
+}

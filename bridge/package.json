@@ -1,0 +1,16 @@
+{
+  "name": "codex-attention-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local Codex attention-inbox bridge for an ESP32 display",
+  "engines": {
+    "node": ">=18.18"
+  },
+  "scripts": {
+    "setup": "node src/setup.mjs",
+    "start": "node src/index.mjs",
+    "check": "node --check src/*.mjs test/*.mjs",
+    "test": "node --test"
+  }
+}
