@@ -4,9 +4,12 @@
 #include <stdint.h>
 #include "sdkconfig.h"
 
+#define ATTENTION_ID_MAX 49
 #define ATTENTION_TITLE_MAX 97
 #define ATTENTION_PROJECT_MAX 49
+#define ATTENTION_KIND_MAX 17
 #define ATTENTION_ERROR_MAX 161
+#define ATTENTION_DETAIL_TEXT_MAX 6145
 
 typedef enum {
     ATTENTION_STATUS_IDLE = 0,
@@ -17,6 +20,7 @@ typedef enum {
 } attention_status_t;
 
 typedef struct {
+    char id[ATTENTION_ID_MAX];
     char title[ATTENTION_TITLE_MAX];
     char project[ATTENTION_PROJECT_MAX];
     attention_status_t status;
@@ -34,3 +38,13 @@ typedef struct {
     char source_error[ATTENTION_ERROR_MAX];
     attention_item_t items[CONFIG_CODEX_ATTENTION_MAX_ITEMS];
 } attention_snapshot_t;
+
+typedef struct {
+    char id[ATTENTION_ID_MAX];
+    char title[ATTENTION_TITLE_MAX];
+    char project[ATTENTION_PROJECT_MAX];
+    char kind[ATTENTION_KIND_MAX];
+    char text[ATTENTION_DETAIL_TEXT_MAX];
+    char source_error[ATTENTION_ERROR_MAX];
+    bool truncated;
+} attention_detail_t;

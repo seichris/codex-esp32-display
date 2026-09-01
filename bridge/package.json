@@ -1,9 +1,9 @@
 {
-  "name": "codex-attention-bridge",
-  "version": "0.1.0",
+  "name": "codex-esp32-display-bridge",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Local Codex attention-inbox bridge for an ESP32 display",
+  "description": "Local Codex attention-inbox and latest-text bridge for an ESP32 display",
   "engines": {
     "node": ">=18.18"
   },

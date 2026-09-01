@@ -45,7 +45,7 @@ if (configExists) {
 
   console.log(`Created ${configPath}`);
   console.log(`Token: ${config.token}`);
-  console.log('Put the same token into firmware → Codex Attention → Bridge token.');
+  console.log('Put the same token into firmware → Codex ESP32 Display → Bridge token.');
   if (addresses.length) {
     for (const address of addresses) {
       console.log(`Candidate bridge URL: http://${address}:${config.port}/api/v1/attention`);

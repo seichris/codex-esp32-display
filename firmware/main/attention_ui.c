@@ -1,12 +1,27 @@
 #include "attention_ui.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include "lvgl.h"
 
+static lv_obj_t *s_list_view;
+static lv_obj_t *s_detail_view;
 static lv_obj_t *s_count_label;
 static lv_obj_t *s_status_label;
 static lv_obj_t *s_list;
+static lv_obj_t *s_cards[CONFIG_CODEX_ATTENTION_MAX_ITEMS];
+static lv_obj_t *s_detail_kind;
+static lv_obj_t *s_detail_title;
+static lv_obj_t *s_detail_meta;
+static lv_obj_t *s_detail_text;
+static lv_obj_t *s_detail_body;
+static attention_snapshot_t s_snapshot;
+static uint32_t s_selected_index;
+static char s_selected_id[ATTENTION_ID_MAX];
+static char s_detail_id[ATTENTION_ID_MAX];
+static attention_ui_open_callback_t s_open_callback;
+static void *s_open_context;
 
 static const lv_color_t COLOR_BG = LV_COLOR_MAKE(8, 10, 14);
 static const lv_color_t COLOR_CARD = LV_COLOR_MAKE(22, 26, 34);
@@ -19,11 +34,21 @@ static const lv_color_t COLOR_BLUE = LV_COLOR_MAKE(116, 170, 245);
 static const lv_color_t COLOR_PURPLE = LV_COLOR_MAKE(185, 147, 255);
 static const lv_color_t COLOR_GREEN = LV_COLOR_MAKE(101, 212, 183);
 static const lv_color_t COLOR_RED = LV_COLOR_MAKE(255, 139, 151);
+static const lv_color_t COLOR_SELECTION = LV_COLOR_MAKE(235, 243, 255);
 
 static void set_common_text(lv_obj_t *label, const lv_font_t *font, lv_color_t color)
 {
     lv_obj_set_style_text_font(label, font, 0);
     lv_obj_set_style_text_color(label, color, 0);
+}
+
+static void make_root(lv_obj_t *root)
+{
+    lv_obj_remove_flag(root, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_size(root, lv_pct(100), lv_pct(100));
+    lv_obj_set_style_bg_opa(root, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(root, 0, 0);
+    lv_obj_set_style_pad_all(root, 0, 0);
 }
 
 static lv_obj_t *create_badge(lv_obj_t *parent, const char *text, lv_color_t color)
@@ -53,13 +78,63 @@ static void format_age(uint32_t seconds, char *buffer, size_t size)
     else snprintf(buffer, size, "%lud", (unsigned long)(seconds / 86400));
 }
 
-static void create_card(const attention_item_t *item)
+static int32_t find_item(const char *thread_id)
+{
+    if (thread_id == NULL || thread_id[0] == '\0') return -1;
+    for (uint32_t index = 0; index < s_snapshot.count; ++index) {
+        if (strcmp(s_snapshot.items[index].id, thread_id) == 0) return (int32_t)index;
+    }
+    return -1;
+}
+
+static void apply_selection(bool scroll)
+{
+    for (uint32_t index = 0; index < s_snapshot.count; ++index) {
+        lv_obj_t *card = s_cards[index];
+        if (card == NULL) continue;
+        const bool selected = index == s_selected_index;
+        lv_obj_set_style_outline_width(card, selected ? 3 : 0, 0);
+        lv_obj_set_style_outline_color(card, COLOR_SELECTION, 0);
+        lv_obj_set_style_outline_pad(card, 1, 0);
+    }
+
+    if (scroll && s_snapshot.count > 0 && s_selected_index < s_snapshot.count
+        && s_cards[s_selected_index] != NULL) {
+        lv_obj_scroll_to_view(s_cards[s_selected_index], LV_ANIM_ON);
+    }
+}
+
+static void select_index(uint32_t index, bool scroll)
+{
+    if (s_snapshot.count == 0) {
+        s_selected_index = 0;
+        s_selected_id[0] = '\0';
+        return;
+    }
+    s_selected_index = index % s_snapshot.count;
+    strlcpy(s_selected_id, s_snapshot.items[s_selected_index].id, sizeof(s_selected_id));
+    apply_selection(scroll);
+}
+
+static void card_clicked(lv_event_t *event)
+{
+    if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+    const uintptr_t encoded = (uintptr_t)lv_event_get_user_data(event);
+    if (encoded == 0) return;
+    const uint32_t index = (uint32_t)(encoded - 1U);
+    if (index >= s_snapshot.count) return;
+    select_index(index, false);
+    if (s_open_callback != NULL) s_open_callback(s_selected_id, s_open_context);
+}
+
+static lv_obj_t *create_card(const attention_item_t *item, uint32_t index)
 {
     const bool waiting = item->status == ATTENTION_STATUS_WAITING_INPUT
         || item->status == ATTENTION_STATUS_WAITING_APPROVAL;
 
     lv_obj_t *card = lv_obj_create(s_list);
     lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_width(card, lv_pct(100));
     lv_obj_set_height(card, LV_SIZE_CONTENT);
     lv_obj_set_style_min_height(card, 92, 0);
@@ -71,6 +146,7 @@ static void create_card(const attention_item_t *item)
     lv_obj_set_style_pad_all(card, 14, 0);
     lv_obj_set_style_pad_row(card, 7, 0);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_add_event_cb(card, card_clicked, LV_EVENT_CLICKED, (void *)(uintptr_t)(index + 1U));
 
     lv_obj_t *title = lv_label_create(card);
     lv_obj_set_width(title, lv_pct(100));
@@ -106,16 +182,15 @@ static void create_card(const attention_item_t *item)
     if (item->pinned) create_badge(badges, "PINNED", COLOR_PURPLE);
     if (item->status == ATTENTION_STATUS_RUNNING) create_badge(badges, "RUNNING", COLOR_GREEN);
     if (item->status == ATTENTION_STATUS_ERROR) create_badge(badges, "ERROR", COLOR_RED);
+    return card;
 }
 
-void attention_ui_init(void)
+static void create_list_view(lv_obj_t *screen)
 {
-    lv_obj_t *screen = lv_screen_active();
-    lv_obj_set_style_bg_color(screen, COLOR_BG, 0);
-    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
-    lv_obj_set_style_pad_all(screen, 0, 0);
+    s_list_view = lv_obj_create(screen);
+    make_root(s_list_view);
 
-    lv_obj_t *header = lv_obj_create(screen);
+    lv_obj_t *header = lv_obj_create(s_list_view);
     lv_obj_remove_flag(header, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_size(header, lv_pct(100), 92);
     lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
@@ -126,7 +201,7 @@ void attention_ui_init(void)
     lv_obj_set_style_pad_bottom(header, 8, 0);
 
     lv_obj_t *eyebrow = lv_label_create(header);
-    lv_label_set_text(eyebrow, "CODEX INBOX");
+    lv_label_set_text(eyebrow, "CODEX INBOX  |  BOOT NEXT  ·  PWR OPEN");
     set_common_text(eyebrow, &lv_font_montserrat_12, COLOR_MUTED);
     lv_obj_align(eyebrow, LV_ALIGN_TOP_LEFT, 0, 0);
 
@@ -150,14 +225,14 @@ void attention_ui_init(void)
     set_common_text(s_count_label, &lv_font_montserrat_16, COLOR_TEXT);
     lv_obj_center(s_count_label);
 
-    s_status_label = lv_label_create(screen);
+    s_status_label = lv_label_create(s_list_view);
     lv_obj_set_width(s_status_label, 374);
     lv_label_set_long_mode(s_status_label, LV_LABEL_LONG_DOT);
     lv_label_set_text(s_status_label, "Connecting to bridge…");
     set_common_text(s_status_label, &lv_font_montserrat_12, COLOR_MUTED);
     lv_obj_align(s_status_label, LV_ALIGN_TOP_MID, 0, 88);
 
-    s_list = lv_obj_create(screen);
+    s_list = lv_obj_create(s_list_view);
     lv_obj_set_size(s_list, 390, 382);
     lv_obj_align(s_list, LV_ALIGN_BOTTOM_MID, 0, -9);
     lv_obj_set_style_bg_opa(s_list, LV_OPA_TRANSP, 0);
@@ -170,9 +245,101 @@ void attention_ui_init(void)
     lv_obj_set_scrollbar_mode(s_list, LV_SCROLLBAR_MODE_AUTO);
 }
 
+static void create_detail_view(lv_obj_t *screen)
+{
+    s_detail_view = lv_obj_create(screen);
+    make_root(s_detail_view);
+    lv_obj_add_flag(s_detail_view, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_t *header = lv_obj_create(s_detail_view);
+    lv_obj_remove_flag(header, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_size(header, 382, 118);
+    lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 10);
+    lv_obj_set_style_radius(header, 18, 0);
+    lv_obj_set_style_bg_color(header, COLOR_CARD, 0);
+    lv_obj_set_style_bg_opa(header, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(header, COLOR_BORDER, 0);
+    lv_obj_set_style_border_width(header, 1, 0);
+    lv_obj_set_style_pad_all(header, 14, 0);
+
+    s_detail_kind = lv_label_create(header);
+    lv_obj_set_width(s_detail_kind, 350);
+    lv_label_set_long_mode(s_detail_kind, LV_LABEL_LONG_DOT);
+    lv_label_set_text(s_detail_kind, "LATEST THREAD TEXT");
+    set_common_text(s_detail_kind, &lv_font_montserrat_12, COLOR_BLUE);
+    lv_obj_align(s_detail_kind, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    s_detail_title = lv_label_create(header);
+    lv_obj_set_width(s_detail_title, 350);
+    lv_label_set_long_mode(s_detail_title, LV_LABEL_LONG_DOT);
+    lv_label_set_text(s_detail_title, "Loading…");
+    set_common_text(s_detail_title, &lv_font_montserrat_20, COLOR_TEXT);
+    lv_obj_align(s_detail_title, LV_ALIGN_TOP_LEFT, 0, 26);
+
+    s_detail_meta = lv_label_create(header);
+    lv_obj_set_width(s_detail_meta, 350);
+    lv_label_set_long_mode(s_detail_meta, LV_LABEL_LONG_DOT);
+    lv_label_set_text(s_detail_meta, "PWR back  ·  BOOT next");
+    set_common_text(s_detail_meta, &lv_font_montserrat_12, COLOR_MUTED);
+    lv_obj_align(s_detail_meta, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+
+    s_detail_body = lv_obj_create(s_detail_view);
+    lv_obj_set_size(s_detail_body, 382, 354);
+    lv_obj_align(s_detail_body, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_obj_set_style_radius(s_detail_body, 18, 0);
+    lv_obj_set_style_bg_color(s_detail_body, COLOR_CARD, 0);
+    lv_obj_set_style_bg_opa(s_detail_body, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(s_detail_body, COLOR_BORDER, 0);
+    lv_obj_set_style_border_width(s_detail_body, 1, 0);
+    lv_obj_set_style_pad_all(s_detail_body, 16, 0);
+    lv_obj_set_scroll_dir(s_detail_body, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(s_detail_body, LV_SCROLLBAR_MODE_AUTO);
+
+    s_detail_text = lv_label_create(s_detail_body);
+    lv_obj_set_width(s_detail_text, 348);
+    lv_label_set_long_mode(s_detail_text, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(s_detail_text, "Loading latest text…");
+    lv_obj_set_style_text_line_space(s_detail_text, 7, 0);
+    set_common_text(s_detail_text, &lv_font_montserrat_16, COLOR_TEXT);
+}
+
+void attention_ui_init(attention_ui_open_callback_t open_callback, void *context)
+{
+    s_open_callback = open_callback;
+    s_open_context = context;
+    memset(&s_snapshot, 0, sizeof(s_snapshot));
+    memset(s_cards, 0, sizeof(s_cards));
+    s_selected_id[0] = '\0';
+    s_detail_id[0] = '\0';
+
+    lv_obj_t *screen = lv_screen_active();
+    lv_obj_set_style_bg_color(screen, COLOR_BG, 0);
+    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_all(screen, 0, 0);
+
+    create_list_view(screen);
+    create_detail_view(screen);
+}
+
 void attention_ui_render(const attention_snapshot_t *snapshot)
 {
     if (snapshot == NULL) return;
+
+    char prior_selected[ATTENTION_ID_MAX];
+    strlcpy(prior_selected, s_selected_id, sizeof(prior_selected));
+    s_snapshot = *snapshot;
+
+    const int32_t selected = find_item(prior_selected);
+    if (selected >= 0) {
+        s_selected_index = (uint32_t)selected;
+        strlcpy(s_selected_id, prior_selected, sizeof(s_selected_id));
+    } else if (s_snapshot.count > 0) {
+        s_selected_index = 0;
+        strlcpy(s_selected_id, s_snapshot.items[0].id, sizeof(s_selected_id));
+    } else {
+        s_selected_index = 0;
+        s_selected_id[0] = '\0';
+    }
 
     char count[20];
     if (snapshot->total_count > 99) snprintf(count, sizeof(count), "99+");
@@ -186,13 +353,14 @@ void attention_ui_render(const attention_snapshot_t *snapshot)
         lv_label_set_text(s_status_label, "CONNECTED  |  unread state unavailable");
         lv_obj_set_style_text_color(s_status_label, COLOR_AMBER, 0);
     } else if (snapshot->truncated) {
-        lv_label_set_text(s_status_label, "CONNECTED  |  scroll for priority items");
+        lv_label_set_text(s_status_label, "CONNECTED  |  priority list truncated");
         lv_obj_set_style_text_color(s_status_label, COLOR_GREEN, 0);
     } else {
         lv_label_set_text(s_status_label, "CONNECTED  |  live");
         lv_obj_set_style_text_color(s_status_label, COLOR_GREEN, 0);
     }
 
+    memset(s_cards, 0, sizeof(s_cards));
     lv_obj_clean(s_list);
     if (snapshot->count == 0) {
         lv_obj_t *empty = lv_obj_create(s_list);
@@ -212,10 +380,102 @@ void attention_ui_render(const attention_snapshot_t *snapshot)
         lv_obj_set_style_text_line_space(label, 8, 0);
         set_common_text(label, &lv_font_montserrat_16, COLOR_MUTED);
         lv_obj_center(label);
-        return;
+    } else {
+        for (uint32_t index = 0; index < snapshot->count; ++index) {
+            s_cards[index] = create_card(&snapshot->items[index], index);
+        }
+        apply_selection(false);
     }
 
-    for (uint32_t index = 0; index < snapshot->count; ++index) {
-        create_card(&snapshot->items[index]);
+    if (attention_ui_is_detail_visible() && find_item(s_detail_id) < 0) {
+        attention_ui_show_list();
     }
+}
+
+bool attention_ui_select_next(void)
+{
+    if (s_snapshot.count == 0) return false;
+    select_index((s_selected_index + 1U) % s_snapshot.count, true);
+    return true;
+}
+
+bool attention_ui_activate_selected(void)
+{
+    if (s_snapshot.count == 0 || s_selected_id[0] == '\0') return false;
+    if (s_open_callback != NULL) s_open_callback(s_selected_id, s_open_context);
+    return true;
+}
+
+bool attention_ui_get_selected_id(char *output, size_t output_size)
+{
+    if (output == NULL || output_size == 0 || s_selected_id[0] == '\0') return false;
+    strlcpy(output, s_selected_id, output_size);
+    return true;
+}
+
+void attention_ui_show_list(void)
+{
+    s_detail_id[0] = '\0';
+    lv_obj_add_flag(s_detail_view, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(s_list_view, LV_OBJ_FLAG_HIDDEN);
+    apply_selection(true);
+}
+
+void attention_ui_show_detail_loading(const char *thread_id)
+{
+    if (thread_id == NULL || thread_id[0] == '\0') return;
+    strlcpy(s_detail_id, thread_id, sizeof(s_detail_id));
+
+    const int32_t index = find_item(thread_id);
+    if (index >= 0) {
+        const attention_item_t *item = &s_snapshot.items[index];
+        lv_label_set_text(s_detail_title, item->title);
+        lv_label_set_text_fmt(s_detail_meta, "%s  |  PWR back  ·  BOOT next", item->project);
+    } else {
+        lv_label_set_text(s_detail_title, "Codex thread");
+        lv_label_set_text(s_detail_meta, "PWR back  ·  BOOT next");
+    }
+    lv_label_set_text(s_detail_kind, "LOADING LATEST TEXT");
+    lv_obj_set_style_text_color(s_detail_kind, COLOR_BLUE, 0);
+    lv_label_set_text(s_detail_text, "Loading latest text…");
+    lv_obj_scroll_to_y(s_detail_body, 0, LV_ANIM_OFF);
+    lv_obj_add_flag(s_list_view, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(s_detail_view, LV_OBJ_FLAG_HIDDEN);
+}
+
+void attention_ui_render_detail(const attention_detail_t *detail)
+{
+    if (detail == NULL || !attention_ui_is_detail_for(detail->id)) return;
+    lv_label_set_text(s_detail_title, detail->title);
+    lv_label_set_text_fmt(s_detail_meta, "%s  |  PWR back  ·  BOOT next", detail->project);
+    lv_label_set_text_fmt(
+        s_detail_kind,
+        "%s%s",
+        detail->kind,
+        detail->truncated ? "  |  TRUNCATED" : ""
+    );
+    lv_obj_set_style_text_color(s_detail_kind, COLOR_BLUE, 0);
+    lv_label_set_text(s_detail_text, detail->text);
+    lv_obj_scroll_to_y(s_detail_body, 0, LV_ANIM_OFF);
+}
+
+void attention_ui_show_detail_error(const char *thread_id, const char *message)
+{
+    if (!attention_ui_is_detail_for(thread_id)) return;
+    lv_label_set_text(s_detail_kind, "COULD NOT LOAD");
+    lv_obj_set_style_text_color(s_detail_kind, COLOR_RED, 0);
+    lv_label_set_text(s_detail_text, message == NULL ? "Unknown bridge error" : message);
+    lv_obj_scroll_to_y(s_detail_body, 0, LV_ANIM_OFF);
+}
+
+bool attention_ui_is_detail_visible(void)
+{
+    return !lv_obj_has_flag(s_detail_view, LV_OBJ_FLAG_HIDDEN);
+}
+
+bool attention_ui_is_detail_for(const char *thread_id)
+{
+    return attention_ui_is_detail_visible()
+        && thread_id != NULL
+        && strcmp(s_detail_id, thread_id) == 0;
 }

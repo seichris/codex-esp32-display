@@ -10,6 +10,58 @@ export class CodexAppServerError extends Error {
   }
 }
 
+function textFromUserInput(value) {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map(textFromUserInput).filter(Boolean).join('\n');
+  if (!value || typeof value !== 'object') return '';
+  if (typeof value.text === 'string') return value.text;
+  if (typeof value.value === 'string') return value.value;
+  if (typeof value.content === 'string') return value.content;
+  return '';
+}
+
+function latestItemOfType(turns, itemType, newestFirst) {
+  const orderedTurns = newestFirst ? turns : [...turns].reverse();
+  for (const turn of orderedTurns) {
+    const items = Array.isArray(turn?.items) ? turn.items : [];
+    for (let index = items.length - 1; index >= 0; index -= 1) {
+      const item = items[index];
+      if (item?.type !== itemType) continue;
+      if (itemType === 'agentMessage' || itemType === 'plan') {
+        if (typeof item.text === 'string' && item.text.trim()) return item.text;
+      } else if (itemType === 'userMessage') {
+        const text = textFromUserInput(item.content);
+        if (text.trim()) return text;
+      }
+    }
+  }
+  return '';
+}
+
+/**
+ * Extract the most useful latest text from App Server turn payloads.
+ * Agent output wins, then a plan, then the latest user message, then preview.
+ */
+export function extractLatestThreadText(turns, {
+  newestFirst = false,
+  preview = '',
+} = {}) {
+  const safeTurns = Array.isArray(turns) ? turns : [];
+  const agent = latestItemOfType(safeTurns, 'agentMessage', newestFirst);
+  if (agent) return { kind: 'agent', text: agent };
+
+  const plan = latestItemOfType(safeTurns, 'plan', newestFirst);
+  if (plan) return { kind: 'plan', text: plan };
+
+  const user = latestItemOfType(safeTurns, 'userMessage', newestFirst);
+  if (user) return { kind: 'user', text: user };
+
+  if (typeof preview === 'string' && preview.trim()) {
+    return { kind: 'preview', text: preview };
+  }
+  return { kind: 'empty', text: 'No text is available for this thread yet.' };
+}
+
 export class CodexAppServerClient extends EventEmitter {
   #command;
   #args;
@@ -70,9 +122,9 @@ export class CodexAppServerClient extends EventEmitter {
 
     await this.request('initialize', {
       clientInfo: {
-        name: 'codex_attention_display',
-        title: 'Codex Attention Display',
-        version: '0.1.0',
+        name: 'codex_esp32_display',
+        title: 'Codex ESP32 Display',
+        version: '0.2.0',
       },
       capabilities: {
         experimentalApi: true,
@@ -150,9 +202,45 @@ export class CodexAppServerClient extends EventEmitter {
     return threads.slice(0, maxThreads);
   }
 
-  async readThread(threadId) {
-    const result = await this.request('thread/read', { threadId, includeTurns: false });
+  async readThread(threadId, { includeTurns = false } = {}) {
+    const result = await this.request('thread/read', { threadId, includeTurns });
     return result?.thread ?? null;
+  }
+
+  async listThreadTurns(threadId, {
+    limit = 3,
+    sortDirection = 'desc',
+    itemsView = 'full',
+  } = {}) {
+    const result = await this.request('thread/turns/list', {
+      threadId,
+      limit,
+      sortDirection,
+      itemsView,
+    });
+    return Array.isArray(result?.data) ? result.data : [];
+  }
+
+  async readLatestThreadText(threadId, { preview = '' } = {}) {
+    try {
+      const turns = await this.listThreadTurns(threadId, {
+        limit: 3,
+        sortDirection: 'desc',
+        itemsView: 'full',
+      });
+      const latest = extractLatestThreadText(turns, { newestFirst: true, preview });
+      if (latest.kind !== 'preview' && latest.kind !== 'empty') return latest;
+    } catch (error) {
+      this.#logger.error(`[bridge] thread/turns/list fallback for ${threadId}: ${error instanceof Error ? error.message : error}`);
+    }
+
+    // Compatibility fallback for older App Server versions. It can return more
+    // history, so the bridge immediately extracts and discards the transcript.
+    const thread = await this.readThread(threadId, { includeTurns: true });
+    return extractLatestThreadText(thread?.turns, {
+      newestFirst: false,
+      preview: thread?.preview || preview,
+    });
   }
 
   async close() {

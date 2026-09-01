@@ -1,98 +1,115 @@
-# Codex Attention Display
+# Codex ESP32 Display
 
-A small, always-on **Codex attention inbox** for the
-[Waveshare ESP32-S3-Touch-AMOLED-2.06](https://www.waveshare.com/wiki/ESP32-S3-Touch-AMOLED-2.06).
-It does not try to show every live agent. It shows the threads that deserve a
-human glance:
+A physical **Codex attention inbox** for the rectangular
+[Waveshare ESP32-S3-Touch-AMOLED-2.06](https://www.waveshare.com/wiki/ESP32-S3-Touch-AMOLED-2.06)
+(410×502 AMOLED, touch, BOOT button, and PWR button).
+
+It intentionally does not show every historical thread. It shows threads that
+need a human glance:
 
 - Codex is waiting for an approval;
 - Codex is waiting for user input;
 - the thread is unread, including a thread manually marked unread;
 - the thread is pinned.
 
-Waiting threads come first, followed by newly completed unread work, other
-unread threads, and then pinned threads. A thread with several reasons appears
-once with several badges.
+Waiting threads come first, then newly completed unread work, other unread
+threads, and pinned threads. A thread appears once even when several reasons
+apply.
+
+## Controls
+
+- **BOOT short press:** highlight the next thread, wrapping at the end.
+- **PWR short press:** open the highlighted thread's latest text.
+- **PWR on the text screen:** return to the inbox.
+- **BOOT on the text screen:** jump to the next thread and load its latest text.
+- **Touch:** scroll either screen; tap a thread card to open it.
+
+The firmware only observes the AXP2101 short-press status. It does not change the
+board's long-hold hardware shutdown behavior.
 
 ## What is implemented
 
-- **Mac bridge with no runtime npm dependencies**
-  - launches `codex app-server` over its documented JSONL stdio transport;
-  - reads thread names, projects, timestamps, status flags, and current pinned
-    section metadata;
-  - reads Codex Desktop's local unread-ID set **read-only**;
-  - listens for `turn/completed` and thread-status notifications;
-  - exposes a token-protected LAN JSON endpoint and a browser dashboard;
-  - reconnects when App Server exits and keeps the latest in-memory snapshot.
-- **ESP-IDF firmware for the rectangular 410×502 AMOLED board**
-  - uses Waveshare's official managed board-support component;
-  - initializes the CO5300 AMOLED and FT3168 touch through the BSP;
-  - connects over Wi-Fi and polls the bridge;
-  - renders touch-scrollable attention cards with approval, input, new, unread,
-    pinned, running, and error badges.
-- **Tests and CI**
-  - Node tests cover state parsing, ranking, deduplication, payload limits, and
-    API authentication;
-  - GitHub Actions builds both the bridge tests and the ESP-IDF firmware.
+### Mac bridge
+
+- launches `codex app-server` over JSONL stdio;
+- reads thread names, projects, timestamps, live status, and pinned-section data;
+- reads Codex Desktop's local unread-ID set **read-only**;
+- observes `turn/completed` and status notifications;
+- exposes a bearer-token-protected attention-list endpoint;
+- exposes an on-demand latest-text endpoint for threads currently in the inbox;
+- includes a browser dashboard with the same list/detail interaction;
+- reconnects when App Server exits and preserves the last good list.
+
+The bridge has no runtime npm dependencies.
+
+### ESP-IDF firmware
+
+- targets the Waveshare ESP32-S3-Touch-AMOLED-2.06 only;
+- uses Waveshare's managed BSP and LVGL 9.5;
+- renders a touch-scrollable 410×502 inbox;
+- preserves the selected thread across list refreshes;
+- reads BOOT on GPIO0 and the PWR short-press latch from the AXP2101 over the
+  BSP's shared I²C bus;
+- fetches long thread text in a separate FreeRTOS task, so the UI remains usable;
+- discards stale detail responses after the user changes threads;
+- keeps the last good list when Wi-Fi or the bridge temporarily fails.
 
 ## Architecture
 
 ```text
 Codex Desktop state                 codex app-server
 ~/.codex/.codex-global-state.json  JSONL over stdio
-          │ unread IDs                    │ threads/status/events
+          │ unread IDs                    │ thread metadata/status/turns
           └──────────────┬─────────────────┘
                          ▼
                  Mac bridge :5180
-              GET /api/v1/attention
+        /api/v1/attention    /api/v1/threads/:id/latest
                          │ Bearer token / LAN
                          ▼
          Waveshare ESP32-S3-Touch-AMOLED-2.06
-            410×502 LVGL touch-scrollable inbox
+        touch + BOOT/PWR list selection and detail view
 ```
 
-The bridge never edits Codex's state files. Pin data primarily comes from the
-App Server's built-in `Pinned` thread section; the persisted-state parser is a
-compatibility fallback.
+The bridge never edits Codex state. Opening text on the ESP32 does **not** mark a
+thread read in Codex Desktop.
 
 ## 1. Start the Mac bridge
 
 Prerequisites:
 
 - macOS with Codex Desktop or Codex CLI installed;
-- Codex CLI available on `PATH`, or Codex bundled inside `ChatGPT.app`/legacy `Codex.app`;
+- Codex CLI on `PATH`, or bundled inside `ChatGPT.app`/legacy `Codex.app`;
 - Node.js 18.18 or newer.
 
 ```bash
-git clone https://github.com/seichris/codex-attention-display.git
-cd codex-attention-display/bridge
+git clone https://github.com/seichris/codex-esp32-display.git
+cd codex-esp32-display/bridge
 npm run setup
 npm start
 ```
 
-`npm run setup` creates `bridge/config.json` with a random 256-bit bearer token
-and prints candidate LAN URLs. It refuses to overwrite an existing config.
+`npm run setup` creates `bridge/config.json` with a random 256-bit bearer token.
+It refuses to overwrite an existing config.
 
-Open the browser dashboard on the Mac:
+Open the browser dashboard:
 
 ```text
 http://127.0.0.1:5180/
 ```
 
-The ESP32 endpoint is:
+The ESP32 list endpoint is:
 
 ```text
 http://<mac-lan-ip>:5180/api/v1/attention
 ```
 
-On macOS, a typical Wi-Fi address can be printed with:
+A typical macOS Wi-Fi address can be printed with:
 
 ```bash
 ipconfig getifaddr en0
 ```
 
-Allow incoming Node connections if the macOS firewall asks. The bridge logs no
-prompt contents and does not expose full thread transcripts.
+Allow incoming Node connections if the macOS firewall asks.
 
 ### Bridge configuration
 
@@ -111,32 +128,25 @@ prompt contents and does not expose full thread transcripts.
 }
 ```
 
-The bridge automatically checks the shell `PATH`, `~/.local/bin`, and the bundled
-Codex binary inside `ChatGPT.app` or legacy `Codex.app`. An explicit `codexBin`
-continues to win.
-
-Environment variables can override the important values:
+Environment overrides are also supported:
 `CODEX_ATTENTION_CONFIG`, `CODEX_ATTENTION_HOST`,
 `CODEX_ATTENTION_PORT`, `CODEX_ATTENTION_TOKEN`,
 `CODEX_ATTENTION_POLL_MS`, `CODEX_BIN`, and `CODEX_HOME`.
 
-### Run the bridge at login
-
-From the repository root, install the included per-user LaunchAgent:
+### Run at login
 
 ```bash
 ./scripts/install-macos-launch-agent.sh
 ```
 
-The installer resolves the current Node and Codex binaries to absolute paths,
-then starts `bridge/src/index.mjs` at login. Logs are written under
-`~/Library/Logs/CodexAttentionDisplay/`. Remove it with:
+Logs are written under `~/Library/Logs/CodexESP32Display/`. Remove the service
+with:
 
 ```bash
 ./scripts/uninstall-macos-launch-agent.sh
 ```
 
-## 2. Flash the Waveshare 2.06-inch board
+## 2. Flash the Waveshare board
 
 Install and export ESP-IDF 5.4 or newer, then:
 
@@ -146,13 +156,13 @@ idf.py set-target esp32s3
 idf.py menuconfig
 ```
 
-Under **Codex Attention Display**, set:
+Under **Codex ESP32 Display**, set:
 
 1. Wi-Fi SSID and password;
-2. the full bridge URL printed during setup;
-3. the same bearer token generated for the bridge.
+2. the full attention endpoint printed during bridge setup;
+3. the same bearer token.
 
-Then build and flash:
+Then:
 
 ```bash
 idf.py build
@@ -161,12 +171,9 @@ idf.py -p /dev/cu.usbmodemXXXX flash monitor
 
 The first build downloads the official
 `waveshare/esp32_s3_touch_amoled_2_06` BSP and LVGL through the ESP-IDF
-Component Manager. The checked-in defaults mirror Waveshare's current LVGL example: a conservative
-16 MB flash map on the board's 32 MB physical flash, plus 8 MB OPI PSRAM.
+Component Manager.
 
 ## Attention rules
-
-The bridge emits a card when this predicate is true:
 
 ```text
 waiting_for_approval
@@ -175,80 +182,66 @@ OR unread
 OR pinned
 ```
 
-Order:
+Priority:
 
 1. waiting for approval;
 2. waiting for user input;
-3. newly completed and unread while this bridge was running;
+3. newly completed and unread while the bridge was running;
 4. any other unread thread;
 5. pinned thread;
 6. newest update first within a group.
 
-“New” is intentionally conservative. After a bridge restart, an unread result
-still appears as **UNREAD**, but only a completion observed live by this bridge
-gets the **NEW** badge. Codex's persisted unread set does not record why a thread
-became unread, so the bridge does not pretend it can always distinguish an
-automatic unread result from “mark unread for later.”
+After a bridge restart, an unread result still appears as **UNREAD**, but only a
+completion observed live by that bridge process gets the **NEW** badge. The
+persisted unread set does not record why a thread became unread.
 
 ## API
 
+List:
+
 ```bash
-curl \
-  -H "Authorization: Bearer <token>" \
+curl -H "Authorization: Bearer <token>" \
   http://127.0.0.1:5180/api/v1/attention
 ```
 
-Example response:
+Latest text for a thread currently in that list:
 
-```json
-{
-  "version": 1,
-  "count": 2,
-  "totalCount": 2,
-  "truncated": false,
-  "items": [
-    {
-      "id": "019a…",
-      "title": "Fix offline-map transfer",
-      "project": "open-bike-computer",
-      "status": "waiting_approval",
-      "unread": true,
-      "pinned": false,
-      "newResult": false,
-      "ageSeconds": 42,
-      "reasons": ["waiting_approval", "unread"]
-    }
-  ]
-}
+```bash
+curl -H "Authorization: Bearer <token>" \
+  http://127.0.0.1:5180/api/v1/threads/<thread-id>/latest
 ```
 
-See [docs/protocol.md](docs/protocol.md) for the complete device contract and
-[docs/architecture.md](docs/architecture.md) for source-of-truth and failure
-behavior.
+The latest-text response prefers the newest Codex agent message, then a plan,
+then a user message, then the thread preview. Text is capped at 5,600 UTF-8 bytes
+for predictable ESP32 memory use.
 
-## Security and compatibility notes
+See [docs/protocol.md](docs/protocol.md) and
+[docs/architecture.md](docs/architecture.md).
 
-- The bearer token prevents accidental access but ordinary HTTP does not hide
-  traffic from someone who can sniff the LAN. Use a trusted/private network.
-- Unread state currently comes from Codex Desktop's local
-  `.codex-global-state.json`. That is an internal, version-sensitive format.
-  Parsing is deliberately read-only, recursive, and failure-tolerant.
-- The current pin and detailed status integration uses App Server's experimental
-  thread metadata. Older Codex versions may fall back to persisted pin IDs and
-  may expose less precise status.
-- If unread state cannot be read, the display says so instead of silently
-  presenting the list as complete.
+## Security and compatibility
+
+- HTTP plus a bearer token prevents accidental access; it does not encrypt LAN
+  traffic. Use a trusted/private network.
+- Unread state comes from Codex Desktop's internal
+  `.codex-global-state.json`. Parsing is read-only and failure-tolerant, but the
+  format can change.
+- Current pinned sections, detailed status, and paginated turns depend on Codex
+  App Server APIs. The bridge falls back to `thread/read` for latest text when
+  turn pagination is unavailable.
+- The PWR input path is implemented against the AXP2101 short-press status latch;
+  physical-button behavior should still be verified on the exact board revision
+  before treating it as production hardware.
 
 ## Development
 
 ```bash
 cd bridge
+npm ci
 npm test
 npm run check
 ```
 
-Firmware CI uses Espressif's official ESP-IDF CI action. Local firmware builds
-use normal `idf.py` commands.
+GitHub Actions runs the bridge suite and an ESP-IDF 5.4.4 firmware build.
 
 ## License
 

@@ -6,9 +6,9 @@ BRIDGE="$ROOT/bridge"
 CONFIG="$BRIDGE/config.json"
 NODE="$(command -v node || true)"
 CODEX="$(command -v codex || true)"
-LABEL="com.seichris.codex-attention-display"
+LABEL="com.seichris.codex-esp32-display"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-LOG_DIR="$HOME/Library/Logs/CodexAttentionDisplay"
+LOG_DIR="$HOME/Library/Logs/CodexESP32Display"
 
 if [[ -z "$NODE" ]]; then
   echo "node was not found on PATH" >&2
@@ -55,6 +55,7 @@ with open(path, "wb") as f:
     plistlib.dump(body, f)
 PY
 
+launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.seichris.codex-attention-display.plist" 2>/dev/null || true
 launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST"
 launchctl kickstart -k "gui/$(id -u)/$LABEL"

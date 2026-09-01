@@ -8,7 +8,7 @@ async function main() {
   const server = createBridgeServer({ service, token: config.token });
 
   await listen(server, config);
-  console.log(`Codex Attention Bridge listening on http://${config.host}:${config.port}`);
+  console.log(`Codex ESP32 Bridge listening on http://${config.host}:${config.port}`);
   console.log(`Reading Codex Desktop state from ${service.desktopStatePath}`);
   console.log('The ESP32 endpoint is /api/v1/attention');
 

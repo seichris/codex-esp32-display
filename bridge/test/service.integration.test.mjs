@@ -33,6 +33,9 @@ rl.on('line', line => {
     process.stdout.write(JSON.stringify({ id: message.id, result: { codexHome: process.env.CODEX_HOME } }) + '\\n');
   } else if (message.method === 'thread/list') {
     process.stdout.write(JSON.stringify({ id: message.id, result: { data: threads, nextCursor: null } }) + '\\n');
+  } else if (message.method === 'thread/turns/list') {
+    const text = message.params.threadId === '${WAITING}' ? 'Please approve the firmware flash.' : 'Latest result';
+    process.stdout.write(JSON.stringify({ id: message.id, result: { data: [{ id: 'turn-1', items: [{ type: 'agentMessage', id: 'item-1', text }] }], nextCursor: null } }) + '\\n');
   }
 });
 `);
@@ -53,6 +56,11 @@ rl.on('line', line => {
     assert.equal(service.snapshot.items[1].unread, true);
     assert.equal(service.snapshot.items[2].pinned, true);
     assert.equal(service.snapshot.diagnostics.desktopStateAvailable, true);
+
+    const detail = await service.latestThread(WAITING);
+    assert.equal(detail.id, WAITING);
+    assert.equal(detail.kind, 'agent');
+    assert.equal(detail.text, 'Please approve the firmware flash.');
   } finally {
     await service.stop();
     await rm(root, { recursive: true, force: true });

@@ -1,4 +1,4 @@
-menu "Codex Attention Display"
+menu "Codex ESP32 Display"
 
 config CODEX_ATTENTION_WIFI_SSID
     string "Wi-Fi SSID"

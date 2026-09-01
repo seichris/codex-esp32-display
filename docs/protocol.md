@@ -1,17 +1,20 @@
 # Device protocol v1
 
-## Request
+All device data endpoints require:
 
 ```http
-GET /api/v1/attention HTTP/1.1
 Authorization: Bearer <bridge-token>
 Accept: application/json
 ```
 
-The response is `Cache-Control: no-store`. A missing or incorrect token returns
+Responses are `Cache-Control: no-store`. A missing or incorrect token returns
 HTTP 401.
 
-## Response
+## Attention list
+
+```http
+GET /api/v1/attention
+```
 
 ```json
 {
@@ -43,29 +46,42 @@ HTTP 401.
 }
 ```
 
-## Fields consumed by firmware
+Firmware consumes the ID, title, project, status, age, unread, pinned, and new
+flags, plus top-level count/truncation/diagnostics.
 
-The ESP32 deliberately consumes only a bounded subset:
+Status values: `idle`, `running`, `waiting_input`, `waiting_approval`, `error`.
+Running or error alone does not cause inclusion.
 
-- top-level `totalCount`, `truncated`, and diagnostics;
-- item `title`, `project`, `status`, `ageSeconds`, `unread`, `pinned`, and
-  `newResult`.
+## Latest thread text
 
-This allows the host API to add fields without requiring a firmware update.
+```http
+GET /api/v1/threads/<url-encoded-thread-id>/latest
+```
 
-## Status values
+Only a thread present in the current bounded attention payload may be read. A
+thread outside that list returns HTTP 404.
 
-- `idle`
-- `running`
-- `waiting_input`
-- `waiting_approval`
-- `error`
+```json
+{
+  "version": 1,
+  "id": "opaque-thread-id",
+  "title": "Implement cadence smoothing",
+  "project": "open-bike-computer",
+  "status": "waiting_input",
+  "reasons": ["waiting_input", "unread"],
+  "updatedAt": 1788220800,
+  "generatedAt": "2026-09-01T00:00:01.000Z",
+  "kind": "agent",
+  "text": "The implementation is complete…",
+  "truncated": false
+}
+```
 
-Running or error alone does not cause inclusion. Such a status appears when the
-same thread is also unread or pinned.
+`kind` is one of `agent`, `plan`, `user`, `preview`, or `empty`. Text is capped
+at 5,600 UTF-8 bytes by the bridge.
 
 ## Versioning
 
 Firmware rejects responses whose `version` is not `1`. Additive fields are
-allowed within v1. Removing or changing the meaning/type of a field requires a
-new protocol version.
+allowed within v1. Removing or changing a field's meaning/type requires a new
+protocol version.

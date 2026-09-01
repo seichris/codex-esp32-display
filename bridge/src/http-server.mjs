@@ -27,6 +27,16 @@ function sendJson(response, statusCode, body) {
   response.end(payload);
 }
 
+function latestThreadId(pathname) {
+  const match = pathname.match(/^\/api\/v1\/threads\/([^/]+)\/latest$/);
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return null;
+  }
+}
+
 export function createBridgeServer({ service, token, logger = console }) {
   return createServer((request, response) => {
     void (async () => {
@@ -53,13 +63,27 @@ export function createBridgeServer({ service, token, logger = console }) {
       }
 
       if (!isAuthorized(request, token)) {
-        response.setHeader('WWW-Authenticate', 'Bearer realm="Codex Attention Bridge"');
+        response.setHeader('WWW-Authenticate', 'Bearer realm="Codex ESP32 Display"');
         sendJson(response, 401, { error: 'unauthorized' });
         return;
       }
 
       if (request.method === 'GET' && url.pathname === '/api/v1/attention') {
         sendJson(response, 200, service.snapshot);
+        return;
+      }
+
+      const threadId = request.method === 'GET' ? latestThreadId(url.pathname) : null;
+      if (threadId) {
+        try {
+          sendJson(response, 200, await service.latestThread(threadId));
+        } catch (error) {
+          if (error?.code === 'attention_thread_not_found') {
+            sendJson(response, 404, { error: 'attention_thread_not_found' });
+            return;
+          }
+          throw error;
+        }
         return;
       }
 
