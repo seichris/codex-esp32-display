@@ -61,6 +61,7 @@ export class CodexAttentionService extends EventEmitter {
     this.#desktop = new DesktopStateReader(config.codexHome);
     this.#snapshot = buildAttentionSnapshot({
       threads: [],
+      attentionFilter: config.attentionFilter,
       desktopStateAvailable: false,
       sourceError: 'Starting Codex App Server…',
     });
@@ -252,6 +253,7 @@ export class CodexAttentionService extends EventEmitter {
       completedAtByThread: this.#completedAtByThread,
       nowSeconds,
       maxItems: this.#config.maxItems,
+      attentionFilter: this.#config.attentionFilter,
       desktopStateAvailable: desktopState.available,
       sourceError: this.#sourceError,
     });

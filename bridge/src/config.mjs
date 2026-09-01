@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
+import { normalizeAttentionFilter } from './attention.mjs';
 import { expandHome } from './util.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -81,6 +82,9 @@ export async function loadConfig() {
     ),
     maxThreads: integer(fileConfig.maxThreads, 300, 25, 2000),
     maxItems: integer(fileConfig.maxItems, 30, 1, 100),
+    attentionFilter: normalizeAttentionFilter(
+      process.env.CODEX_ATTENTION_FILTER ?? fileConfig.attentionFilter,
+    ),
     codexBin: resolveCodexBin(process.env.CODEX_BIN ?? fileConfig.codexBin ?? 'codex'),
     codexHome: expandHome(process.env.CODEX_HOME ?? fileConfig.codexHome ?? '~/.codex'),
   };

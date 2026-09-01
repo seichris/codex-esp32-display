@@ -27,6 +27,7 @@ if (configExists) {
     pollIntervalMs: 2000,
     maxThreads: 300,
     maxItems: 30,
+    attentionFilter: 'unread+pinned',
     codexBin: 'codex',
     codexHome: '~/.codex',
   };

@@ -46,6 +46,7 @@ rl.on('line', line => {
     codexHome,
     maxThreads: 100,
     maxItems: 30,
+    attentionFilter: 'all',
     pollIntervalMs: 60_000,
   }, { logger: { error() {}, log() {} } });
 

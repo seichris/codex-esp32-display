@@ -2,6 +2,13 @@ import { asEpochSeconds, clampText, oneLine, projectName } from './util.mjs';
 
 const WAITING_FLAGS = new Set(['waitingOnApproval', 'waitingOnUserInput']);
 const PINNED_SECTION_ID = '01984de2-8f74-7c91-a3b2-5c5e937cf318';
+const DEFAULT_ATTENTION_FILTER = 'unread+pinned';
+const ATTENTION_FILTERS = new Set(['all', DEFAULT_ATTENTION_FILTER]);
+
+export function normalizeAttentionFilter(value) {
+  const candidate = String(value ?? DEFAULT_ATTENTION_FILTER).trim().toLowerCase();
+  return ATTENTION_FILTERS.has(candidate) ? candidate : DEFAULT_ATTENTION_FILTER;
+}
 
 export function normalizeThreadStatus(status) {
   if (typeof status === 'string') {
@@ -44,10 +51,12 @@ export function buildAttentionSnapshot({
   nowSeconds = Math.floor(Date.now() / 1000),
   maxItems = 30,
   includeSubagents = false,
+  attentionFilter = DEFAULT_ATTENTION_FILTER,
   desktopStateAvailable = true,
   sourceError = null,
 }) {
   const items = [];
+  const filter = normalizeAttentionFilter(attentionFilter);
 
   for (const thread of threads ?? []) {
     if (!thread || typeof thread.id !== 'string') continue;
@@ -57,7 +66,10 @@ export function buildAttentionSnapshot({
     const unread = unreadIds.has(thread.id) || thread.hasUnreadTurn === true;
     const pinned = isPinnedThread(thread, pinnedIds);
     const waiting = status === 'waiting_input' || status === 'waiting_approval';
-    if (!waiting && !unread && !pinned) continue;
+    const included = filter === DEFAULT_ATTENTION_FILTER
+      ? unread && pinned
+      : waiting || unread || pinned;
+    if (!included) continue;
 
     const updatedAt = asEpochSeconds(
       thread.recencyAt ?? thread.recency_at ?? thread.updatedAt ?? thread.updated_at ?? thread.createdAt,
@@ -98,6 +110,7 @@ export function buildAttentionSnapshot({
   const limited = items.slice(0, Math.max(1, maxItems));
   return {
     version: 1,
+    attentionFilter: filter,
     generatedAt: new Date(nowSeconds * 1000).toISOString(),
     count: limited.length,
     totalCount: items.length,

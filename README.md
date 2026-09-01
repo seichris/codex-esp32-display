@@ -4,17 +4,13 @@ A physical **Codex attention inbox** for the rectangular
 [Waveshare ESP32-S3-Touch-AMOLED-2.06](https://www.waveshare.com/wiki/ESP32-S3-Touch-AMOLED-2.06)
 (410×502 AMOLED, touch, BOOT button, and PWR button).
 
-It intentionally does not show every historical thread. It shows threads that
-need a human glance:
+It intentionally does not show every historical thread. By default it shows
+only threads that are both unread and pinned, so the device stays focused on
+the threads you explicitly chose to keep visible.
 
-- Codex is waiting for an approval;
-- Codex is waiting for user input;
-- the thread is unread, including a thread manually marked unread;
-- the thread is pinned.
-
-Waiting threads come first, then newly completed unread work, other unread
-threads, and pinned threads. A thread appears once even when several reasons
-apply.
+The previous attention inbox, which included waiting, unread, or pinned
+threads, remains available with the `all` filter. A thread appears once even
+when several reasons apply.
 
 ## Controls
 
@@ -123,6 +119,7 @@ Allow incoming Node connections if the macOS firewall asks.
   "pollIntervalMs": 2000,
   "maxThreads": 300,
   "maxItems": 30,
+  "attentionFilter": "unread+pinned",
   "codexBin": "codex",
   "codexHome": "~/.codex"
 }
@@ -131,7 +128,9 @@ Allow incoming Node connections if the macOS firewall asks.
 Environment overrides are also supported:
 `CODEX_ATTENTION_CONFIG`, `CODEX_ATTENTION_HOST`,
 `CODEX_ATTENTION_PORT`, `CODEX_ATTENTION_TOKEN`,
-`CODEX_ATTENTION_POLL_MS`, `CODEX_BIN`, and `CODEX_HOME`.
+`CODEX_ATTENTION_POLL_MS`, `CODEX_ATTENTION_FILTER`, `CODEX_BIN`, and
+`CODEX_HOME`. The filter defaults to `unread+pinned`; set it to `all` to
+restore the waiting/unread/pinned attention inbox.
 
 ### Run at login
 
@@ -189,13 +188,22 @@ start/stop, the dashboard, endpoint copying, and log access from its menu.
 ## Attention rules
 
 ```text
+unread
+AND pinned
+```
+
+The default `unread+pinned` filter requires both flags. Set
+`attentionFilter` to `all` (or set `CODEX_ATTENTION_FILTER=all`) to use the
+previous attention inbox:
+
+```text
 waiting_for_approval
 OR waiting_for_user_input
 OR unread
 OR pinned
 ```
 
-Priority:
+With the `all` filter, priority is:
 
 1. waiting for approval;
 2. waiting for user input;

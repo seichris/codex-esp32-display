@@ -19,6 +19,7 @@ GET /api/v1/attention
 ```json
 {
   "version": 1,
+  "attentionFilter": "unread+pinned",
   "generatedAt": "2026-09-01T00:00:00.000Z",
   "count": 3,
   "totalCount": 5,

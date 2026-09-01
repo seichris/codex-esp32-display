@@ -25,7 +25,7 @@ test('normalizes current App Server active flags', () => {
   assert.equal(normalizeThreadStatus({ type: 'notLoaded' }), 'idle');
 });
 
-test('filters to waiting, unread, or pinned and orders by attention', () => {
+test('filters to waiting, unread, or pinned in all mode and orders by attention', () => {
   const threads = [
     thread(1, { status: { type: 'active', activeFlags: [] } }), // running only: hidden
     thread(2, { section: { id: '01984de2-8f74-7c91-a3b2-5c5e937cf318', name: 'Pinned' } }),
@@ -41,13 +41,36 @@ test('filters to waiting, unread, or pinned and orders by attention', () => {
     threads,
     unreadIds,
     completedAtByThread,
+    attentionFilter: 'all',
     nowSeconds: NOW,
   });
 
+  assert.equal(snapshot.attentionFilter, 'all');
   assert.deepEqual(snapshot.items.map((item) => item.id), [id(5), id(4), id(6), id(3), id(2)]);
   assert.equal(snapshot.items[2].newResult, true);
   assert.equal(snapshot.items[3].newResult, false);
   assert.deepEqual(snapshot.items[4].reasons, ['pinned']);
+});
+
+test('defaults to the unread and pinned intersection', () => {
+  const threads = [
+    thread(8),
+    thread(9, { section: { name: 'Pinned' } }),
+    thread(10, { section: { name: 'Pinned' } }),
+    thread(11, {
+      status: { type: 'active', activeFlags: ['waitingOnApproval'] },
+      section: { name: 'Pinned' },
+    }),
+  ];
+  const snapshot = buildAttentionSnapshot({
+    threads,
+    unreadIds: new Set([id(10)]),
+    nowSeconds: NOW,
+  });
+
+  assert.equal(snapshot.attentionFilter, 'unread+pinned');
+  assert.deepEqual(snapshot.items.map((item) => item.id), [id(10)]);
+  assert.deepEqual(snapshot.items[0].reasons, ['unread', 'pinned']);
 });
 
 test('keeps one card when a thread has multiple reasons', () => {
@@ -68,7 +91,13 @@ test('keeps one card when a thread has multiple reasons', () => {
 test('caps device payload while reporting total count', () => {
   const threads = Array.from({ length: 8 }, (_, index) => thread(index + 10));
   const unreadIds = new Set(threads.map((value) => value.id));
-  const snapshot = buildAttentionSnapshot({ threads, unreadIds, nowSeconds: NOW, maxItems: 3 });
+  const snapshot = buildAttentionSnapshot({
+    threads,
+    unreadIds,
+    attentionFilter: 'all',
+    nowSeconds: NOW,
+    maxItems: 3,
+  });
   assert.equal(snapshot.count, 3);
   assert.equal(snapshot.totalCount, 8);
   assert.equal(snapshot.truncated, true);

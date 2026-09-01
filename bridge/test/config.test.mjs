@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { delimiter, join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { normalizeAttentionFilter } from '../src/attention.mjs';
 import { resolveCodexBin } from '../src/config.mjs';
 
 test('resolves codex from PATH before falling back to a bare command', async () => {
@@ -19,4 +20,10 @@ test('resolves codex from PATH before falling back to a bare command', async () 
 
 test('preserves an explicit codex command or path', () => {
   assert.equal(resolveCodexBin('custom-codex', { PATH: '' }, 'linux'), 'custom-codex');
+});
+
+test('defaults invalid attention filters to the unread and pinned mode', () => {
+  assert.equal(normalizeAttentionFilter(), 'unread+pinned');
+  assert.equal(normalizeAttentionFilter('ALL'), 'all');
+  assert.equal(normalizeAttentionFilter('unknown'), 'unread+pinned');
 });

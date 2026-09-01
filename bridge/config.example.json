@@ -6,5 +6,6 @@
   "maxThreads": 300,
   "codexBin": "codex",
   "codexHome": "~/.codex",
-  "maxItems": 30
+  "maxItems": 30,
+  "attentionFilter": "unread+pinned"
 }
