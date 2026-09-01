@@ -17,3 +17,7 @@ firmware/managed_components/
 
 # Logs
 *.log
+
+# macOS menu-bar companion
+macos/.build/
+macos/build/

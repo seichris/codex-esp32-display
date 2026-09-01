@@ -173,6 +173,19 @@ The first build downloads the official
 `waveshare/esp32_s3_touch_amoled_2_06` BSP and LVGL through the ESP-IDF
 Component Manager.
 
+## 3. Optional macOS menu-bar companion
+
+The native SwiftUI companion owns the bridge process and shows a small outline
+of the 2.06 device in the macOS menu bar:
+
+```bash
+./macos/build_app.sh
+open "macos/build/Codex ESP32 Display.app"
+```
+
+It replaces the bridge LaunchAgent while running and provides bridge status,
+start/stop, the dashboard, endpoint copying, and log access from its menu.
+
 ## Attention rules
 
 ```text
