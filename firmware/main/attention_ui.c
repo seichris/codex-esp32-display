@@ -46,6 +46,10 @@ static const lv_color_t COLOR_RED = LV_COLOR_MAKE(255, 139, 151);
 #define LIST_ITEM_GAP (CARD_TITLE_SUBTITLE_GAP * 4)
 #define LIST_HEADER_TITLE_INSET 60
 #define LIST_HEADER_EDGE_INSET 10
+#define SETTINGS_BUTTON_SIZE 42
+#define LIST_HEADER_SETTINGS_INSET (LIST_HEADER_EDGE_INSET + SETTINGS_BUTTON_SIZE)
+#define DETAIL_TEXT_TOP_INSET 4
+#define DETAIL_BOTTOM_MARGIN 10
 #define SETTINGS_NVS_NAMESPACE "attention_ui"
 #define SETTINGS_NVS_TITLE_KEY "title_font"
 #define SETTINGS_NVS_SUBTITLE_KEY "subtitle_font"
@@ -91,6 +95,7 @@ enum {
 };
 
 static void update_settings_controls(void);
+static void position_detail_body(void);
 
 static void set_common_text(lv_obj_t *label, const lv_font_t *font, lv_color_t color)
 {
@@ -368,7 +373,7 @@ static void create_list_view(lv_obj_t *screen)
     lv_obj_set_style_border_width(header, 0, 0);
     lv_obj_set_style_pad_all(header, 0, 0);
     lv_obj_set_style_pad_left(header, LIST_HEADER_TITLE_INSET, 0);
-    lv_obj_set_style_pad_right(header, LIST_HEADER_EDGE_INSET, 0);
+    lv_obj_set_style_pad_right(header, LIST_HEADER_SETTINGS_INSET, 0);
     lv_obj_set_style_pad_column(header, 10, 0);
     lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(header, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -400,16 +405,21 @@ static void create_list_view(lv_obj_t *screen)
     lv_label_set_text(s_count_label, "(--)");
     set_common_text(s_count_label, &lv_font_montserrat_16, COLOR_TEXT);
 
-    (void)create_action_button(
+    lv_obj_t *settings_button = create_action_button(
         header,
         LV_SYMBOL_SETTINGS,
-        42,
-        42,
+        SETTINGS_BUTTON_SIZE,
+        SETTINGS_BUTTON_SIZE,
         &lv_font_montserrat_24,
         COLOR_TEXT,
         settings_icon_clicked,
         NULL
     );
+    lv_obj_set_style_radius(settings_button, 0, 0);
+    lv_obj_set_style_bg_opa(settings_button, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_bg_opa(settings_button, LV_OPA_TRANSP, LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(settings_button, 0, 0);
+    lv_obj_set_style_border_width(settings_button, 0, LV_STATE_PRESSED);
 
     lv_obj_t *divider = lv_obj_create(s_list_view);
     lv_obj_remove_flag(divider, LV_OBJ_FLAG_SCROLLABLE);
@@ -471,6 +481,7 @@ static void create_detail_view(lv_obj_t *screen)
     lv_obj_set_style_bg_opa(s_detail_body, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_detail_body, 0, 0);
     lv_obj_set_style_pad_all(s_detail_body, 16, 0);
+    lv_obj_set_style_pad_top(s_detail_body, DETAIL_TEXT_TOP_INSET, 0);
     lv_obj_set_scroll_dir(s_detail_body, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(s_detail_body, LV_SCROLLBAR_MODE_AUTO);
 
@@ -480,10 +491,34 @@ static void create_detail_view(lv_obj_t *screen)
     lv_label_set_text(s_detail_text, "Loading latest text…");
     lv_obj_set_style_text_line_space(s_detail_text, 10, 0);
     set_common_text(s_detail_text, &lv_font_montserrat_20, COLOR_TEXT);
+    position_detail_body();
+}
+
+static void position_detail_body(void)
+{
+    if (s_detail_view == NULL || s_detail_title == NULL || s_detail_body == NULL) return;
+
+    lv_obj_t *header = lv_obj_get_parent(s_detail_title);
+    lv_obj_update_layout(s_detail_view);
+    lv_obj_update_layout(header);
+    lv_obj_update_layout(s_detail_title);
+
+    const lv_coord_t header_y = lv_obj_get_y(header);
+    const lv_coord_t title_y = lv_obj_get_y(s_detail_title);
+    const lv_coord_t title_height = lv_obj_get_height(s_detail_title);
+    const lv_coord_t body_y = header_y + title_y + title_height;
+    const lv_coord_t view_height = lv_obj_get_height(s_detail_view);
+    const lv_coord_t body_height = view_height > body_y + DETAIL_BOTTOM_MARGIN
+        ? view_height - body_y - DETAIL_BOTTOM_MARGIN
+        : 1;
+
+    lv_obj_align(s_detail_body, LV_ALIGN_TOP_MID, 0, body_y);
+    lv_obj_set_height(s_detail_body, body_height);
 }
 
 static void scroll_detail_to_end(void)
 {
+    position_detail_body();
     lv_obj_update_layout(s_detail_body);
     lv_obj_scroll_to_y(s_detail_body, LV_COORD_MAX, LV_ANIM_OFF);
 }
