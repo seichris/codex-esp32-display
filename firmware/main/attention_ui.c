@@ -24,6 +24,7 @@ static char s_detail_id[ATTENTION_ID_MAX];
 static attention_ui_open_callback_t s_open_callback;
 static void *s_open_context;
 
+static const lv_color_t COLOR_BG = LV_COLOR_MAKE(8, 10, 14);
 static const lv_color_t COLOR_BORDER = LV_COLOR_MAKE(51, 61, 76);
 static const lv_color_t COLOR_TEXT = LV_COLOR_MAKE(242, 245, 249);
 static const lv_color_t COLOR_MUTED = LV_COLOR_MAKE(151, 162, 179);
@@ -287,7 +288,8 @@ void attention_ui_init(attention_ui_open_callback_t open_callback, void *context
     s_detail_id[0] = '\0';
 
     lv_obj_t *screen = lv_screen_active();
-    lv_obj_set_style_bg_opa(screen, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_bg_color(screen, COLOR_BG, 0);
+    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_all(screen, 0, 0);
 
     create_list_view(screen);
