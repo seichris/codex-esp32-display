@@ -249,8 +249,9 @@ See [docs/protocol.md](docs/protocol.md) and
   `.codex-global-state.json`. Parsing is read-only and failure-tolerant, but the
   format can change.
 - Current pinned sections, detailed status, and paginated turns depend on Codex
-  App Server APIs. The bridge falls back to `thread/read` for latest text when
-  turn pagination is unavailable.
+  App Server APIs. For latest text, the bridge falls back from paginated turns
+  to `thread/read` and then to the authenticated thread's local rollout file
+  when an older App Server exposes metadata but not transcript APIs.
 - The PWR input path is implemented against the AXP2101 short-press status latch;
   physical-button behavior should still be verified on the exact board revision
   before treating it as production hardware.

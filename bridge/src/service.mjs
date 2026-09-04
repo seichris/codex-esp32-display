@@ -141,6 +141,7 @@ export class CodexAttentionService extends EventEmitter {
     const client = new CodexAppServerClient({
       command: this.#config.codexBin,
       env: { ...process.env, CODEX_HOME: this.#config.codexHome },
+      codexHome: this.#config.codexHome,
       logger: this.#logger,
     });
 

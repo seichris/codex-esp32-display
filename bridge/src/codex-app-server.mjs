@@ -1,6 +1,9 @@
+import { createReadStream } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { createInterface } from 'node:readline';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { expandHome } from './util.mjs';
 
 export class CodexAppServerError extends Error {
   constructor(message, details = undefined) {
@@ -17,6 +20,7 @@ function textFromUserInput(value) {
   if (typeof value.text === 'string') return value.text;
   if (typeof value.value === 'string') return value.value;
   if (typeof value.content === 'string') return value.content;
+  if (value.content !== undefined) return textFromUserInput(value.content);
   return '';
 }
 
@@ -28,7 +32,8 @@ function latestItemOfType(turns, itemType, newestFirst) {
       const item = items[index];
       if (item?.type !== itemType) continue;
       if (itemType === 'agentMessage' || itemType === 'plan') {
-        if (typeof item.text === 'string' && item.text.trim()) return item.text;
+        const text = textFromUserInput(item.text ?? item.content);
+        if (text.trim()) return text;
       } else if (itemType === 'userMessage') {
         const text = textFromUserInput(item.content);
         if (text.trim()) return text;
@@ -62,6 +67,97 @@ export function extractLatestThreadText(turns, {
   return { kind: 'empty', text: 'No text is available for this thread yet.' };
 }
 
+function rolloutItemText(item) {
+  const type = String(item?.type ?? '').toLowerCase();
+  if (type === 'agentmessage' || type === 'assistantmessage' || type === 'agent') {
+    const text = textFromUserInput(item.text ?? item.content);
+    return text.trim() ? { kind: 'agent', text } : null;
+  }
+  if (type === 'plan') {
+    const text = textFromUserInput(item.text ?? item.content);
+    return text.trim() ? { kind: 'plan', text } : null;
+  }
+  if (type === 'usermessage' || type === 'user') {
+    const text = textFromUserInput(item.content ?? item.text);
+    return text.trim() ? { kind: 'user', text } : null;
+  }
+  return null;
+}
+
+function rolloutRecordItem(record, threadId) {
+  const payload = record?.payload;
+  if (!payload || typeof payload !== 'object') return null;
+  if (threadId && typeof payload.thread_id === 'string' && payload.thread_id !== threadId) return null;
+
+  if (payload.type === 'item_completed') return rolloutItemText(payload.item);
+  if (record?.type === 'response_item' && payload.type === 'message') {
+    const role = String(payload.role ?? '').toLowerCase();
+    const text = textFromUserInput(payload.content);
+    if (!text.trim()) return null;
+    if (role === 'assistant') return { kind: 'agent', text };
+    if (role === 'user') return { kind: 'user', text };
+  }
+  return null;
+}
+
+function allowedRolloutPath(rolloutPath, codexHome) {
+  if (typeof rolloutPath !== 'string' || !isAbsolute(rolloutPath)) return false;
+  if (!codexHome) return true;
+
+  const root = resolve(codexHome);
+  const candidate = resolve(rolloutPath);
+  const relativePath = relative(root, candidate);
+  return relativePath !== ''
+    && relativePath !== '..'
+    && !relativePath.startsWith(`..${sep}`)
+    && !isAbsolute(relativePath);
+}
+
+/**
+ * Read a Codex rollout without exposing the transcript to logs or retaining
+ * the full file in memory. This is a compatibility fallback for App Server
+ * versions that expose thread metadata but not paginated or embedded turns.
+ */
+export async function readLatestRolloutText(rolloutPath, {
+  threadId = '',
+  preview = '',
+  codexHome = null,
+  logger = console,
+} = {}) {
+  const fallback = extractLatestThreadText([], { preview });
+  if (!allowedRolloutPath(rolloutPath, codexHome)) {
+    logger?.error?.(`[bridge] rollout fallback path rejected for ${threadId || 'unknown thread'}`);
+    return fallback;
+  }
+
+  const latest = { agent: '', plan: '', user: '' };
+  try {
+    const input = createReadStream(rolloutPath, { encoding: 'utf8' });
+    const lines = createInterface({ input, crlfDelay: Infinity });
+    for await (const line of lines) {
+      if (!line.trim()) continue;
+      let record;
+      try {
+        record = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const item = rolloutRecordItem(record, threadId);
+      if (item?.text?.trim()) latest[item.kind] = item.text;
+    }
+  } catch (error) {
+    logger?.error?.(
+      `[bridge] rollout fallback unavailable for ${threadId || 'unknown thread'}: ${error instanceof Error ? error.message : error}`,
+    );
+    return fallback;
+  }
+
+  if (latest.agent.trim()) return { kind: 'agent', text: latest.agent };
+  if (latest.plan.trim()) return { kind: 'plan', text: latest.plan };
+  if (latest.user.trim()) return { kind: 'user', text: latest.user };
+  return fallback;
+}
+
 export class CodexAppServerClient extends EventEmitter {
   #command;
   #args;
@@ -69,6 +165,7 @@ export class CodexAppServerClient extends EventEmitter {
   #cwd;
   #logger;
   #timeoutMs;
+  #codexHome;
   #child = null;
   #nextId = 1;
   #pending = new Map();
@@ -82,6 +179,7 @@ export class CodexAppServerClient extends EventEmitter {
     cwd = process.cwd(),
     logger = console,
     timeoutMs = 12_000,
+    codexHome = null,
   } = {}) {
     super();
     this.#command = command;
@@ -90,6 +188,8 @@ export class CodexAppServerClient extends EventEmitter {
     this.#cwd = cwd;
     this.#logger = logger;
     this.#timeoutMs = timeoutMs;
+    const configuredCodexHome = codexHome ?? env.CODEX_HOME;
+    this.#codexHome = configuredCodexHome ? resolve(expandHome(configuredCodexHome)) : null;
   }
 
   get ready() { return this.#ready; }
@@ -234,9 +334,38 @@ export class CodexAppServerClient extends EventEmitter {
       this.#logger.error(`[bridge] thread/turns/list fallback for ${threadId}: ${error instanceof Error ? error.message : error}`);
     }
 
-    // Compatibility fallback for older App Server versions. It can return more
-    // history, so the bridge immediately extracts and discards the transcript.
-    const thread = await this.readThread(threadId, { includeTurns: true });
+    // Compatibility fallback for older App Server versions. Some versions
+    // advertise these methods but return `paginated_threads is not supported
+    // yet`; in that case metadata still includes the rollout path.
+    let thread = null;
+    try {
+      thread = await this.readThread(threadId, { includeTurns: true });
+      const latest = extractLatestThreadText(thread?.turns, {
+        newestFirst: false,
+        preview: thread?.preview || preview,
+      });
+      if (latest.kind !== 'preview' && latest.kind !== 'empty') return latest;
+    } catch (error) {
+      this.#logger.error(`[bridge] thread/read fallback for ${threadId}: ${error instanceof Error ? error.message : error}`);
+    }
+
+    if (!thread?.path) {
+      try {
+        thread = await this.readThread(threadId);
+      } catch (error) {
+        this.#logger.error(`[bridge] thread metadata unavailable for ${threadId}: ${error instanceof Error ? error.message : error}`);
+      }
+    }
+
+    if (thread?.path) {
+      return readLatestRolloutText(thread.path, {
+        threadId,
+        preview: thread.preview || preview,
+        codexHome: this.#codexHome,
+        logger: this.#logger,
+      });
+    }
+
     return extractLatestThreadText(thread?.turns, {
       newestFirst: false,
       preview: thread?.preview || preview,

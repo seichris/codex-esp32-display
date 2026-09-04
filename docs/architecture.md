@@ -16,7 +16,7 @@ read its latest useful text without marking it read.
 | Pinned | Built-in pinned thread section | Recognized persisted pin-ID keys | No |
 | Unread / manually unread | Recognized IDs in `.codex-global-state.json` | None | No |
 | Newly completed | Live `turn/completed` intersected with unread | Plain unread after restart | No |
-| Latest text | `thread/turns/list`, full items, newest first | `thread/read(includeTurns=true)` | No |
+| Latest text | `thread/turns/list`, full items, newest first | `thread/read(includeTurns=true)`, then the thread's local rollout file | No |
 
 ## Bridge components
 
@@ -26,7 +26,8 @@ read its latest useful text without marking it read.
 - performs `initialize` → `initialized`;
 - paginates `thread/list`;
 - reads recent full turn items only when a detail view is requested;
-- falls back to `thread/read` for older App Server versions;
+- falls back to `thread/read` and then the thread's local rollout file when an
+  older App Server does not support transcript APIs;
 - never logs or publishes full transcripts except to the authenticated caller
   requesting one current attention thread.
 
