@@ -11,6 +11,7 @@ static lv_obj_t *s_count_label;
 static lv_obj_t *s_status_dot;
 static lv_obj_t *s_list;
 static lv_obj_t *s_cards[CONFIG_CODEX_ATTENTION_MAX_ITEMS];
+static lv_obj_t *s_card_titles[CONFIG_CODEX_ATTENTION_MAX_ITEMS];
 static lv_obj_t *s_detail_kind;
 static lv_obj_t *s_detail_title;
 static lv_obj_t *s_detail_meta;
@@ -23,18 +24,13 @@ static char s_detail_id[ATTENTION_ID_MAX];
 static attention_ui_open_callback_t s_open_callback;
 static void *s_open_context;
 
-static const lv_color_t COLOR_BG = LV_COLOR_MAKE(8, 10, 14);
-static const lv_color_t COLOR_CARD = LV_COLOR_MAKE(22, 26, 34);
-static const lv_color_t COLOR_CARD_WAIT = LV_COLOR_MAKE(48, 37, 18);
 static const lv_color_t COLOR_BORDER = LV_COLOR_MAKE(51, 61, 76);
 static const lv_color_t COLOR_TEXT = LV_COLOR_MAKE(242, 245, 249);
 static const lv_color_t COLOR_MUTED = LV_COLOR_MAKE(151, 162, 179);
 static const lv_color_t COLOR_AMBER = LV_COLOR_MAKE(242, 190, 80);
 static const lv_color_t COLOR_BLUE = LV_COLOR_MAKE(116, 170, 245);
-static const lv_color_t COLOR_PURPLE = LV_COLOR_MAKE(185, 147, 255);
 static const lv_color_t COLOR_GREEN = LV_COLOR_MAKE(101, 212, 183);
 static const lv_color_t COLOR_RED = LV_COLOR_MAKE(255, 139, 151);
-static const lv_color_t COLOR_SELECTION = LV_COLOR_MAKE(235, 243, 255);
 
 static void set_common_text(lv_obj_t *label, const lv_font_t *font, lv_color_t color)
 {
@@ -53,21 +49,10 @@ static void make_root(lv_obj_t *root)
 
 static lv_obj_t *create_badge(lv_obj_t *parent, const char *text, lv_color_t color)
 {
-    lv_obj_t *badge = lv_obj_create(parent);
-    lv_obj_remove_flag(badge, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(badge, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_style_radius(badge, 20, 0);
-    lv_obj_set_style_bg_opa(badge, LV_OPA_10, 0);
-    lv_obj_set_style_bg_color(badge, color, 0);
-    lv_obj_set_style_border_width(badge, 1, 0);
-    lv_obj_set_style_border_color(badge, color, 0);
-    lv_obj_set_style_pad_hor(badge, 8, 0);
-    lv_obj_set_style_pad_ver(badge, 4, 0);
-
-    lv_obj_t *label = lv_label_create(badge);
+    lv_obj_t *label = lv_label_create(parent);
     lv_label_set_text(label, text);
     set_common_text(label, &lv_font_montserrat_12, color);
-    return badge;
+    return label;
 }
 
 static void format_age(uint32_t seconds, char *buffer, size_t size)
@@ -93,9 +78,13 @@ static void apply_selection(bool scroll)
         lv_obj_t *card = s_cards[index];
         if (card == NULL) continue;
         const bool selected = index == s_selected_index;
-        lv_obj_set_style_outline_width(card, selected ? 3 : 0, 0);
-        lv_obj_set_style_outline_color(card, COLOR_SELECTION, 0);
-        lv_obj_set_style_outline_pad(card, 1, 0);
+        if (s_card_titles[index] != NULL) {
+            lv_obj_set_style_text_color(
+                s_card_titles[index],
+                selected ? COLOR_GREEN : COLOR_TEXT,
+                0
+            );
+        }
     }
 
     if (scroll && s_snapshot.count > 0 && s_selected_index < s_snapshot.count
@@ -129,21 +118,16 @@ static void card_clicked(lv_event_t *event)
 
 static lv_obj_t *create_card(const attention_item_t *item, uint32_t index)
 {
-    const bool waiting = item->status == ATTENTION_STATUS_WAITING_INPUT
-        || item->status == ATTENTION_STATUS_WAITING_APPROVAL;
-
     lv_obj_t *card = lv_obj_create(s_list);
     lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_width(card, lv_pct(100));
     lv_obj_set_height(card, LV_SIZE_CONTENT);
     lv_obj_set_style_min_height(card, 92, 0);
-    lv_obj_set_style_radius(card, 16, 0);
-    lv_obj_set_style_bg_color(card, waiting ? COLOR_CARD_WAIT : COLOR_CARD, 0);
-    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(card, 1, 0);
-    lv_obj_set_style_border_color(card, waiting ? COLOR_AMBER : COLOR_BORDER, 0);
-    lv_obj_set_style_pad_all(card, 14, 0);
+    lv_obj_set_style_radius(card, 0, 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(card, 0, 0);
+    lv_obj_set_style_pad_all(card, 8, 0);
     lv_obj_set_style_pad_row(card, 7, 0);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
     lv_obj_add_event_cb(card, card_clicked, LV_EVENT_CLICKED, (void *)(uintptr_t)(index + 1U));
@@ -153,6 +137,7 @@ static lv_obj_t *create_card(const attention_item_t *item, uint32_t index)
     lv_label_set_long_mode(title, LV_LABEL_LONG_WRAP);
     lv_label_set_text(title, item->title);
     set_common_text(title, &lv_font_montserrat_18, COLOR_TEXT);
+    s_card_titles[index] = title;
 
     char age[16];
     char meta[ATTENTION_PROJECT_MAX + 24];
@@ -178,8 +163,6 @@ static lv_obj_t *create_card(const attention_item_t *item, uint32_t index)
     if (item->status == ATTENTION_STATUS_WAITING_APPROVAL) create_badge(badges, "APPROVAL", COLOR_AMBER);
     if (item->status == ATTENTION_STATUS_WAITING_INPUT) create_badge(badges, "INPUT", COLOR_AMBER);
     if (item->new_result) create_badge(badges, "NEW", COLOR_BLUE);
-    else if (item->unread) create_badge(badges, "UNREAD", COLOR_BLUE);
-    if (item->pinned) create_badge(badges, "PINNED", COLOR_PURPLE);
     if (item->status == ATTENTION_STATUS_RUNNING) create_badge(badges, "RUNNING", COLOR_GREEN);
     if (item->status == ATTENTION_STATUS_ERROR) create_badge(badges, "ERROR", COLOR_RED);
     return card;
@@ -192,18 +175,18 @@ static void create_list_view(lv_obj_t *screen)
 
     lv_obj_t *header = lv_obj_create(s_list_view);
     lv_obj_remove_flag(header, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(header, lv_pct(100), 78);
+    lv_obj_set_size(header, lv_pct(100), 54);
     lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_set_style_bg_opa(header, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(header, 0, 0);
-    lv_obj_set_style_pad_hor(header, 18, 0);
-    lv_obj_set_style_pad_top(header, 17, 0);
-    lv_obj_set_style_pad_bottom(header, 8, 0);
+    lv_obj_set_style_pad_all(header, 0, 0);
+    lv_obj_set_style_pad_column(header, 10, 0);
+    lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(header, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
     lv_obj_t *title = lv_label_create(header);
-    lv_label_set_text(title, "Needs attention");
+    lv_label_set_text(title, "Pinned, Unread");
     set_common_text(title, &lv_font_montserrat_24, COLOR_TEXT);
-    lv_obj_align(title, LV_ALIGN_BOTTOM_LEFT, 0, -3);
 
     s_status_dot = lv_obj_create(header);
     lv_obj_remove_flag(s_status_dot, LV_OBJ_FLAG_SCROLLABLE);
@@ -212,25 +195,22 @@ static void create_list_view(lv_obj_t *screen)
     lv_obj_set_style_bg_color(s_status_dot, COLOR_RED, 0);
     lv_obj_set_style_bg_opa(s_status_dot, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(s_status_dot, 0, 0);
-    lv_obj_align_to(s_status_dot, title, LV_ALIGN_OUT_RIGHT_MID, 10, 0);
-
-    lv_obj_t *count_pill = lv_obj_create(header);
-    lv_obj_remove_flag(count_pill, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(count_pill, 58, 38);
-    lv_obj_align(count_pill, LV_ALIGN_BOTTOM_RIGHT, 0, -3);
-    lv_obj_set_style_radius(count_pill, 20, 0);
-    lv_obj_set_style_bg_color(count_pill, COLOR_CARD, 0);
-    lv_obj_set_style_bg_opa(count_pill, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(count_pill, COLOR_BORDER, 0);
-    lv_obj_set_style_border_width(count_pill, 1, 0);
-
-    s_count_label = lv_label_create(count_pill);
-    lv_label_set_text(s_count_label, "--");
+    s_count_label = lv_label_create(header);
+    lv_label_set_text(s_count_label, "(--)");
     set_common_text(s_count_label, &lv_font_montserrat_16, COLOR_TEXT);
-    lv_obj_center(s_count_label);
+
+    lv_obj_t *divider = lv_obj_create(s_list_view);
+    lv_obj_remove_flag(divider, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_size(divider, 390, 1);
+    lv_obj_align(divider, LV_ALIGN_TOP_MID, 0, 54);
+    lv_obj_set_style_radius(divider, 0, 0);
+    lv_obj_set_style_bg_color(divider, COLOR_BORDER, 0);
+    lv_obj_set_style_bg_opa(divider, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(divider, 0, 0);
+    lv_obj_set_style_pad_all(divider, 0, 0);
 
     s_list = lv_obj_create(s_list_view);
-    lv_obj_set_size(s_list, 390, 405);
+    lv_obj_set_size(s_list, 390, 428);
     lv_obj_align(s_list, LV_ALIGN_BOTTOM_MID, 0, -9);
     lv_obj_set_style_bg_opa(s_list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_list, 0, 0);
@@ -252,11 +232,9 @@ static void create_detail_view(lv_obj_t *screen)
     lv_obj_remove_flag(header, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_size(header, 382, 118);
     lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 10);
-    lv_obj_set_style_radius(header, 18, 0);
-    lv_obj_set_style_bg_color(header, COLOR_CARD, 0);
-    lv_obj_set_style_bg_opa(header, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(header, COLOR_BORDER, 0);
-    lv_obj_set_style_border_width(header, 1, 0);
+    lv_obj_set_style_radius(header, 0, 0);
+    lv_obj_set_style_bg_opa(header, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(header, 0, 0);
     lv_obj_set_style_pad_all(header, 14, 0);
 
     s_detail_kind = lv_label_create(header);
@@ -283,11 +261,9 @@ static void create_detail_view(lv_obj_t *screen)
     s_detail_body = lv_obj_create(s_detail_view);
     lv_obj_set_size(s_detail_body, 382, 354);
     lv_obj_align(s_detail_body, LV_ALIGN_BOTTOM_MID, 0, -10);
-    lv_obj_set_style_radius(s_detail_body, 18, 0);
-    lv_obj_set_style_bg_color(s_detail_body, COLOR_CARD, 0);
-    lv_obj_set_style_bg_opa(s_detail_body, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(s_detail_body, COLOR_BORDER, 0);
-    lv_obj_set_style_border_width(s_detail_body, 1, 0);
+    lv_obj_set_style_radius(s_detail_body, 0, 0);
+    lv_obj_set_style_bg_opa(s_detail_body, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_detail_body, 0, 0);
     lv_obj_set_style_pad_all(s_detail_body, 16, 0);
     lv_obj_set_scroll_dir(s_detail_body, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(s_detail_body, LV_SCROLLBAR_MODE_AUTO);
@@ -306,12 +282,12 @@ void attention_ui_init(attention_ui_open_callback_t open_callback, void *context
     s_open_context = context;
     memset(&s_snapshot, 0, sizeof(s_snapshot));
     memset(s_cards, 0, sizeof(s_cards));
+    memset(s_card_titles, 0, sizeof(s_card_titles));
     s_selected_id[0] = '\0';
     s_detail_id[0] = '\0';
 
     lv_obj_t *screen = lv_screen_active();
-    lv_obj_set_style_bg_color(screen, COLOR_BG, 0);
-    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_opa(screen, LV_OPA_TRANSP, 0);
     lv_obj_set_style_pad_all(screen, 0, 0);
 
     create_list_view(screen);
@@ -341,23 +317,22 @@ void attention_ui_render(const attention_snapshot_t *snapshot)
     char count[20];
     if (snapshot->total_count > 99) snprintf(count, sizeof(count), "99+");
     else snprintf(count, sizeof(count), "%lu", (unsigned long)snapshot->total_count);
-    lv_label_set_text(s_count_label, count);
+    lv_label_set_text_fmt(s_count_label, "(%s)", count);
 
     const bool status_ok = snapshot->source_error[0] == '\0'
         && snapshot->desktop_state_available;
     lv_obj_set_style_bg_color(s_status_dot, status_ok ? COLOR_GREEN : COLOR_RED, 0);
 
     memset(s_cards, 0, sizeof(s_cards));
+    memset(s_card_titles, 0, sizeof(s_card_titles));
     lv_obj_clean(s_list);
     if (snapshot->count == 0) {
         lv_obj_t *empty = lv_obj_create(s_list);
         lv_obj_remove_flag(empty, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_size(empty, lv_pct(100), 150);
-        lv_obj_set_style_radius(empty, 18, 0);
-        lv_obj_set_style_bg_color(empty, COLOR_CARD, 0);
-        lv_obj_set_style_bg_opa(empty, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_color(empty, COLOR_BORDER, 0);
-        lv_obj_set_style_border_width(empty, 1, 0);
+        lv_obj_set_style_radius(empty, 0, 0);
+        lv_obj_set_style_bg_opa(empty, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(empty, 0, 0);
 
         lv_obj_t *label = lv_label_create(empty);
         lv_label_set_text(label, snapshot->source_error[0] == '\0'
