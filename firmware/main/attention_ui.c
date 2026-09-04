@@ -207,6 +207,15 @@ static void settings_icon_clicked(lv_event_t *event);
 static void settings_back_clicked(lv_event_t *event);
 static void settings_step_clicked(lv_event_t *event);
 
+static void style_icon_button(lv_obj_t *button)
+{
+    lv_obj_set_style_radius(button, 0, 0);
+    lv_obj_set_style_bg_opa(button, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_bg_opa(button, LV_OPA_TRANSP, LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(button, 0, 0);
+    lv_obj_set_style_border_width(button, 0, LV_STATE_PRESSED);
+}
+
 static lv_obj_t *create_action_button(
     lv_obj_t *parent,
     const char *text,
@@ -415,11 +424,7 @@ static void create_list_view(lv_obj_t *screen)
         settings_icon_clicked,
         NULL
     );
-    lv_obj_set_style_radius(settings_button, 0, 0);
-    lv_obj_set_style_bg_opa(settings_button, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_bg_opa(settings_button, LV_OPA_TRANSP, LV_STATE_PRESSED);
-    lv_obj_set_style_border_width(settings_button, 0, 0);
-    lv_obj_set_style_border_width(settings_button, 0, LV_STATE_PRESSED);
+    style_icon_button(settings_button);
 
     lv_obj_t *divider = lv_obj_create(s_list_view);
     lv_obj_remove_flag(divider, LV_OBJ_FLAG_SCROLLABLE);
@@ -604,14 +609,15 @@ static void create_settings_view(lv_obj_t *screen)
     lv_obj_t *back_button = create_action_button(
         s_settings_view,
         LV_SYMBOL_LEFT,
-        48,
-        42,
+        SETTINGS_BUTTON_SIZE,
+        SETTINGS_BUTTON_SIZE,
         &lv_font_montserrat_24,
         COLOR_TEXT,
         settings_back_clicked,
         NULL
     );
-    lv_obj_align(back_button, LV_ALIGN_TOP_LEFT, 10, 6);
+    style_icon_button(back_button);
+    lv_obj_align(back_button, LV_ALIGN_TOP_LEFT, LIST_HEADER_SETTINGS_INSET, 6);
 
     lv_obj_t *heading = lv_label_create(s_settings_view);
     lv_obj_set_width(heading, 250);
