@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "attention_client.h"
+#include "attention_audio.h"
 #include "attention_model.h"
 #include "attention_ui.h"
 #include "bsp/display.h"
@@ -22,6 +23,56 @@ typedef struct {
 } detail_request_t;
 
 static QueueHandle_t s_detail_queue;
+
+static uint8_t attention_reason_mask(const attention_item_t *item)
+{
+    if (item == NULL) return 0;
+
+    uint8_t mask = 0;
+    if (item->unread) mask |= 1U << 0;
+    if (item->pinned) mask |= 1U << 1;
+    if (item->new_result) mask |= 1U << 2;
+    if (item->status == ATTENTION_STATUS_WAITING_INPUT
+        || item->status == ATTENTION_STATUS_WAITING_APPROVAL) {
+        mask |= 1U << 3;
+    }
+    return mask;
+}
+
+static const attention_item_t *find_attention_item(
+    const attention_snapshot_t *snapshot,
+    const char *thread_id
+)
+{
+    if (snapshot == NULL || thread_id == NULL) return NULL;
+
+    for (uint32_t index = 0; index < snapshot->count; ++index) {
+        if (strcmp(snapshot->items[index].id, thread_id) == 0) {
+            return &snapshot->items[index];
+        }
+    }
+    return NULL;
+}
+
+static bool snapshot_should_chime(
+    const attention_snapshot_t *previous,
+    const attention_snapshot_t *next
+)
+{
+    if (previous == NULL || next == NULL || next->source_error[0] != '\0') return false;
+
+    for (uint32_t index = 0; index < next->count; ++index) {
+        const attention_item_t *item = &next->items[index];
+        const attention_item_t *old_item = find_attention_item(previous, item->id);
+        if (old_item == NULL) return true;
+
+        const uint8_t old_reasons = attention_reason_mask(old_item);
+        const uint8_t new_reasons = attention_reason_mask(item);
+        if ((new_reasons & (uint8_t)~old_reasons) != 0) return true;
+    }
+
+    return false;
+}
 
 static void render_snapshot(const attention_snapshot_t *snapshot)
 {
@@ -45,6 +96,8 @@ static void poll_task(void *argument)
 {
     (void)argument;
     attention_snapshot_t current = { 0 };
+    attention_snapshot_t previous_success = { 0 };
+    bool has_previous_success = false;
     attention_snapshot_t fetched;
 
     while (true) {
@@ -57,7 +110,12 @@ static void poll_task(void *argument)
 
         esp_err_t result = attention_client_fetch(&fetched);
         if (result == ESP_OK) {
+            if (has_previous_success && snapshot_should_chime(&previous_success, &fetched)) {
+                attention_audio_notify();
+            }
             current = fetched;
+            previous_success = fetched;
+            has_previous_success = true;
         } else {
             snprintf(
                 current.source_error,
@@ -165,6 +223,10 @@ void app_main(void)
     bsp_display_unlock();
 
     ESP_ERROR_CHECK(button_input_init());
+    esp_err_t audio_result = attention_audio_init();
+    if (audio_result != ESP_OK) {
+        ESP_LOGW(TAG, "Attention audio disabled: %s", esp_err_to_name(audio_result));
+    }
     ESP_ERROR_CHECK(wifi_manager_start());
 
     create_task_or_log(poll_task, "attention_poll", 16384, 5);

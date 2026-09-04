@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "main.c"
+        "attention_audio.c"
         "wifi_manager.c"
         "attention_client.c"
         "attention_ui.c"
@@ -10,6 +11,7 @@ idf_component_register(
         esp_driver_gpio
         esp_driver_i2c
         esp_event
+        esp_codec_dev
         esp_http_client
         esp_netif
         esp_wifi
