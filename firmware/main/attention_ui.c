@@ -33,6 +33,9 @@ static const lv_color_t COLOR_BLUE = LV_COLOR_MAKE(116, 170, 245);
 static const lv_color_t COLOR_GREEN = LV_COLOR_MAKE(101, 212, 183);
 static const lv_color_t COLOR_RED = LV_COLOR_MAKE(255, 139, 151);
 
+#define CARD_TITLE_SUBTITLE_GAP 4
+#define LIST_ITEM_GAP (CARD_TITLE_SUBTITLE_GAP * 4)
+
 static void set_common_text(lv_obj_t *label, const lv_font_t *font, lv_color_t color)
 {
     lv_obj_set_style_text_font(label, font, 0);
@@ -124,12 +127,12 @@ static lv_obj_t *create_card(const attention_item_t *item, uint32_t index)
     lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_width(card, lv_pct(100));
     lv_obj_set_height(card, LV_SIZE_CONTENT);
-    lv_obj_set_style_min_height(card, 92, 0);
+    lv_obj_set_style_min_height(card, 0, 0);
     lv_obj_set_style_radius(card, 0, 0);
     lv_obj_set_style_bg_opa(card, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(card, 0, 0);
-    lv_obj_set_style_pad_all(card, 8, 0);
-    lv_obj_set_style_pad_row(card, 7, 0);
+    lv_obj_set_style_pad_all(card, CARD_TITLE_SUBTITLE_GAP, 0);
+    lv_obj_set_style_pad_row(card, CARD_TITLE_SUBTITLE_GAP, 0);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
     lv_obj_add_event_cb(card, card_clicked, LV_EVENT_CLICKED, (void *)(uintptr_t)(index + 1U));
 
@@ -181,13 +184,14 @@ static void create_list_view(lv_obj_t *screen)
     lv_obj_set_style_bg_opa(header, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(header, 0, 0);
     lv_obj_set_style_pad_all(header, 0, 0);
+    lv_obj_set_style_pad_hor(header, 10, 0);
     lv_obj_set_style_pad_column(header, 10, 0);
     lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(header, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_flex_align(header, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
     lv_obj_t *title = lv_label_create(header);
     lv_label_set_text(title, "Pinned, Unread");
-    set_common_text(title, &lv_font_montserrat_24, COLOR_TEXT);
+    set_common_text(title, &lv_font_montserrat_16, COLOR_TEXT);
 
     s_status_dot = lv_obj_create(header);
     lv_obj_remove_flag(s_status_dot, LV_OBJ_FLAG_SCROLLABLE);
@@ -216,7 +220,7 @@ static void create_list_view(lv_obj_t *screen)
     lv_obj_set_style_bg_opa(s_list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_list, 0, 0);
     lv_obj_set_style_pad_all(s_list, 0, 0);
-    lv_obj_set_style_pad_row(s_list, 10, 0);
+    lv_obj_set_style_pad_row(s_list, LIST_ITEM_GAP, 0);
     lv_obj_set_flex_flow(s_list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(s_list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
     lv_obj_set_scroll_dir(s_list, LV_DIR_VER);
