@@ -18,6 +18,8 @@ export class AttentionThreadNotFoundError extends Error {
 function cleanDetailText(value) {
   if (typeof value !== 'string') return '';
   return value
+    .replace(/<oai-mem-citation\b[\s\S]*?(?:<\/oai-mem-citation\s*>|$)/gi, '')
+    .replace(/&lt;oai-mem-citation\b[\s\S]*?(?:&lt;\/oai-mem-citation\s*&gt;|$)/gi, '')
     .replace(/\r\n?/g, '\n')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{4,}/g, '\n\n\n')

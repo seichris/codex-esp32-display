@@ -65,6 +65,33 @@ static void copy_json_string(char *destination, size_t size, const cJSON *object
     }
 }
 
+static void strip_citation_marker_block(char *text, const char *opening, const char *closing)
+{
+    if (text == NULL || opening == NULL || closing == NULL) return;
+
+    while (true) {
+        char *start = strstr(text, opening);
+        if (start == NULL) return;
+
+        char *end = strstr(start, closing);
+        if (end != NULL) end += strlen(closing);
+        else end = text + strlen(text);
+
+        char *prefix_end = start;
+        while (prefix_end > text && isspace((unsigned char)prefix_end[-1])) prefix_end--;
+
+        char *suffix_start = end;
+        while (*suffix_start != '\0' && isspace((unsigned char)*suffix_start)) suffix_start++;
+        memmove(prefix_end, suffix_start, strlen(suffix_start) + 1);
+    }
+}
+
+static void strip_output_citations(char *text)
+{
+    strip_citation_marker_block(text, "<oai-mem-citation", "</oai-mem-citation>");
+    strip_citation_marker_block(text, "&lt;oai-mem-citation", "&lt;/oai-mem-citation&gt;");
+}
+
 static bool json_bool(const cJSON *object, const char *key)
 {
     return cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(object, key));
@@ -208,6 +235,7 @@ static esp_err_t parse_detail(const char *json, attention_detail_t *detail)
     copy_json_string(detail->project, sizeof(detail->project), root, "project");
     copy_json_string(detail->kind, sizeof(detail->kind), root, "kind");
     copy_json_string(detail->text, sizeof(detail->text), root, "text");
+    strip_output_citations(detail->text);
     detail->truncated = json_bool(root, "truncated");
 
     if (detail->id[0] == '\0' || detail->text[0] == '\0') {

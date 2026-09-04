@@ -12,7 +12,6 @@ static lv_obj_t *s_status_dot;
 static lv_obj_t *s_list;
 static lv_obj_t *s_cards[CONFIG_CODEX_ATTENTION_MAX_ITEMS];
 static lv_obj_t *s_card_titles[CONFIG_CODEX_ATTENTION_MAX_ITEMS];
-static lv_obj_t *s_detail_kind;
 static lv_obj_t *s_detail_title;
 static lv_obj_t *s_detail_meta;
 static lv_obj_t *s_detail_text;
@@ -35,6 +34,8 @@ static const lv_color_t COLOR_RED = LV_COLOR_MAKE(255, 139, 151);
 
 #define CARD_TITLE_SUBTITLE_GAP 4
 #define LIST_ITEM_GAP (CARD_TITLE_SUBTITLE_GAP * 4)
+#define LIST_HEADER_TITLE_INSET 60
+#define LIST_HEADER_EDGE_INSET 10
 
 static void set_common_text(lv_obj_t *label, const lv_font_t *font, lv_color_t color)
 {
@@ -55,7 +56,7 @@ static lv_obj_t *create_badge(lv_obj_t *parent, const char *text, lv_color_t col
 {
     lv_obj_t *label = lv_label_create(parent);
     lv_label_set_text(label, text);
-    set_common_text(label, &lv_font_montserrat_12, color);
+    set_common_text(label, &lv_font_montserrat_24, color);
     return label;
 }
 
@@ -140,7 +141,7 @@ static lv_obj_t *create_card(const attention_item_t *item, uint32_t index)
     lv_obj_set_width(title, lv_pct(100));
     lv_label_set_long_mode(title, LV_LABEL_LONG_WRAP);
     lv_label_set_text(title, item->title);
-    set_common_text(title, &lv_font_montserrat_18, COLOR_TEXT);
+    set_common_text(title, &lv_font_montserrat_36, COLOR_TEXT);
     s_card_titles[index] = title;
 
     char age[16];
@@ -151,7 +152,7 @@ static lv_obj_t *create_card(const attention_item_t *item, uint32_t index)
     lv_obj_set_width(meta_label, lv_pct(100));
     lv_label_set_long_mode(meta_label, LV_LABEL_LONG_DOT);
     lv_label_set_text(meta_label, meta);
-    set_common_text(meta_label, &lv_font_montserrat_14, COLOR_MUTED);
+    set_common_text(meta_label, &lv_font_montserrat_28, COLOR_MUTED);
 
     lv_obj_t *badges = lv_obj_create(card);
     lv_obj_remove_flag(badges, LV_OBJ_FLAG_SCROLLABLE);
@@ -184,7 +185,8 @@ static void create_list_view(lv_obj_t *screen)
     lv_obj_set_style_bg_opa(header, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(header, 0, 0);
     lv_obj_set_style_pad_all(header, 0, 0);
-    lv_obj_set_style_pad_hor(header, 10, 0);
+    lv_obj_set_style_pad_left(header, LIST_HEADER_TITLE_INSET, 0);
+    lv_obj_set_style_pad_right(header, LIST_HEADER_EDGE_INSET, 0);
     lv_obj_set_style_pad_column(header, 10, 0);
     lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(header, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -235,36 +237,30 @@ static void create_detail_view(lv_obj_t *screen)
 
     lv_obj_t *header = lv_obj_create(s_detail_view);
     lv_obj_remove_flag(header, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(header, 382, 118);
+    lv_obj_set_size(header, 382, 160);
     lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 10);
     lv_obj_set_style_radius(header, 0, 0);
     lv_obj_set_style_bg_opa(header, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(header, 0, 0);
     lv_obj_set_style_pad_all(header, 14, 0);
 
-    s_detail_kind = lv_label_create(header);
-    lv_obj_set_width(s_detail_kind, 350);
-    lv_label_set_long_mode(s_detail_kind, LV_LABEL_LONG_DOT);
-    lv_label_set_text(s_detail_kind, "LATEST THREAD TEXT");
-    set_common_text(s_detail_kind, &lv_font_montserrat_12, COLOR_BLUE);
-    lv_obj_align(s_detail_kind, LV_ALIGN_TOP_LEFT, 0, 0);
-
     s_detail_title = lv_label_create(header);
     lv_obj_set_width(s_detail_title, 350);
-    lv_label_set_long_mode(s_detail_title, LV_LABEL_LONG_DOT);
+    lv_label_set_long_mode(s_detail_title, LV_LABEL_LONG_WRAP);
     lv_label_set_text(s_detail_title, "Loading…");
-    set_common_text(s_detail_title, &lv_font_montserrat_20, COLOR_TEXT);
+    set_common_text(s_detail_title, &lv_font_montserrat_40, COLOR_TEXT);
     lv_obj_align(s_detail_title, LV_ALIGN_TOP_LEFT, 0, 26);
 
     s_detail_meta = lv_label_create(header);
     lv_obj_set_width(s_detail_meta, 350);
     lv_label_set_long_mode(s_detail_meta, LV_LABEL_LONG_DOT);
-    lv_label_set_text(s_detail_meta, "PWR back  ·  BOOT next");
-    set_common_text(s_detail_meta, &lv_font_montserrat_12, COLOR_MUTED);
-    lv_obj_align(s_detail_meta, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_label_set_text(s_detail_meta, "Codex");
+    lv_obj_set_style_text_align(s_detail_meta, LV_TEXT_ALIGN_CENTER, 0);
+    set_common_text(s_detail_meta, &lv_font_montserrat_24, COLOR_MUTED);
+    lv_obj_align(s_detail_meta, LV_ALIGN_TOP_MID, 0, 0);
 
     s_detail_body = lv_obj_create(s_detail_view);
-    lv_obj_set_size(s_detail_body, 382, 354);
+    lv_obj_set_size(s_detail_body, 382, 312);
     lv_obj_align(s_detail_body, LV_ALIGN_BOTTOM_MID, 0, -10);
     lv_obj_set_style_radius(s_detail_body, 0, 0);
     lv_obj_set_style_bg_opa(s_detail_body, LV_OPA_TRANSP, 0);
@@ -277,8 +273,14 @@ static void create_detail_view(lv_obj_t *screen)
     lv_obj_set_width(s_detail_text, 348);
     lv_label_set_long_mode(s_detail_text, LV_LABEL_LONG_WRAP);
     lv_label_set_text(s_detail_text, "Loading latest text…");
-    lv_obj_set_style_text_line_space(s_detail_text, 7, 0);
-    set_common_text(s_detail_text, &lv_font_montserrat_16, COLOR_TEXT);
+    lv_obj_set_style_text_line_space(s_detail_text, 14, 0);
+    set_common_text(s_detail_text, &lv_font_montserrat_32, COLOR_TEXT);
+}
+
+static void scroll_detail_to_end(void)
+{
+    lv_obj_update_layout(s_detail_body);
+    lv_obj_scroll_to_y(s_detail_body, LV_COORD_MAX, LV_ANIM_OFF);
 }
 
 void attention_ui_init(attention_ui_open_callback_t open_callback, void *context)
@@ -345,8 +347,8 @@ void attention_ui_render(const attention_snapshot_t *snapshot)
             ? "Inbox clear\nNo unread, pinned, or waiting threads."
             : "No cached threads\nCheck the Mac bridge and Wi-Fi.");
         lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_set_style_text_line_space(label, 8, 0);
-        set_common_text(label, &lv_font_montserrat_16, COLOR_MUTED);
+        lv_obj_set_style_text_line_space(label, 16, 0);
+        set_common_text(label, &lv_font_montserrat_32, COLOR_MUTED);
         lv_obj_center(label);
     } else {
         for (uint32_t index = 0; index < snapshot->count; ++index) {
@@ -398,15 +400,13 @@ void attention_ui_show_detail_loading(const char *thread_id)
     if (index >= 0) {
         const attention_item_t *item = &s_snapshot.items[index];
         lv_label_set_text(s_detail_title, item->title);
-        lv_label_set_text_fmt(s_detail_meta, "%s  |  PWR back  ·  BOOT next", item->project);
+        lv_label_set_text(s_detail_meta, item->project);
     } else {
         lv_label_set_text(s_detail_title, "Codex thread");
-        lv_label_set_text(s_detail_meta, "PWR back  ·  BOOT next");
+        lv_label_set_text(s_detail_meta, "Codex");
     }
-    lv_label_set_text(s_detail_kind, "LOADING LATEST TEXT");
-    lv_obj_set_style_text_color(s_detail_kind, COLOR_BLUE, 0);
     lv_label_set_text(s_detail_text, "Loading latest text…");
-    lv_obj_scroll_to_y(s_detail_body, 0, LV_ANIM_OFF);
+    scroll_detail_to_end();
     lv_obj_add_flag(s_list_view, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(s_detail_view, LV_OBJ_FLAG_HIDDEN);
 }
@@ -415,25 +415,16 @@ void attention_ui_render_detail(const attention_detail_t *detail)
 {
     if (detail == NULL || !attention_ui_is_detail_for(detail->id)) return;
     lv_label_set_text(s_detail_title, detail->title);
-    lv_label_set_text_fmt(s_detail_meta, "%s  |  PWR back  ·  BOOT next", detail->project);
-    lv_label_set_text_fmt(
-        s_detail_kind,
-        "%s%s",
-        detail->kind,
-        detail->truncated ? "  |  TRUNCATED" : ""
-    );
-    lv_obj_set_style_text_color(s_detail_kind, COLOR_BLUE, 0);
+    lv_label_set_text(s_detail_meta, detail->project);
     lv_label_set_text(s_detail_text, detail->text);
-    lv_obj_scroll_to_y(s_detail_body, 0, LV_ANIM_OFF);
+    scroll_detail_to_end();
 }
 
 void attention_ui_show_detail_error(const char *thread_id, const char *message)
 {
     if (!attention_ui_is_detail_for(thread_id)) return;
-    lv_label_set_text(s_detail_kind, "COULD NOT LOAD");
-    lv_obj_set_style_text_color(s_detail_kind, COLOR_RED, 0);
     lv_label_set_text(s_detail_text, message == NULL ? "Unknown bridge error" : message);
-    lv_obj_scroll_to_y(s_detail_body, 0, LV_ANIM_OFF);
+    scroll_detail_to_end();
 }
 
 bool attention_ui_is_detail_visible(void)
