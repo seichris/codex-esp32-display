@@ -18,7 +18,9 @@ when several reasons apply.
 - **PWR short press:** open the highlighted thread's latest text.
 - **PWR on the text screen:** return to the inbox.
 - **BOOT on the text screen:** jump to the next thread and load its latest text.
-- **Touch:** scroll either screen; tap a thread card to open it.
+- **Touch:** scroll the inbox or text screen; tap a thread card to open it;
+  tap the gear to adjust title and subtitle sizes, then use the back arrow to
+  return to the inbox.
 
 The firmware only observes the AXP2101 short-press status. It does not change the
 board's long-hold hardware shutdown behavior.

@@ -170,14 +170,18 @@ static void button_task(void *argument)
 
         bsp_display_lock(0);
         if (event == BUTTON_INPUT_NEXT) {
-            if (attention_ui_is_detail_visible()) {
+            if (attention_ui_is_settings_visible()) {
+                attention_ui_show_list();
+            } else if (attention_ui_is_detail_visible()) {
                 attention_ui_show_list();
                 if (attention_ui_select_next()) (void)attention_ui_activate_selected();
             } else {
                 (void)attention_ui_select_next();
             }
         } else if (event == BUTTON_INPUT_SELECT) {
-            if (attention_ui_is_detail_visible()) attention_ui_show_list();
+            if (attention_ui_is_detail_visible() || attention_ui_is_settings_visible()) {
+                attention_ui_show_list();
+            }
             else (void)attention_ui_activate_selected();
         }
         bsp_display_unlock();

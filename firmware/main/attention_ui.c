@@ -4,9 +4,11 @@
 #include <stdio.h>
 #include <string.h>
 #include "lvgl.h"
+#include "nvs.h"
 
 static lv_obj_t *s_list_view;
 static lv_obj_t *s_detail_view;
+static lv_obj_t *s_settings_view;
 static lv_obj_t *s_count_label;
 static lv_obj_t *s_status_dot;
 static lv_obj_t *s_list;
@@ -16,6 +18,14 @@ static lv_obj_t *s_detail_title;
 static lv_obj_t *s_detail_meta;
 static lv_obj_t *s_detail_text;
 static lv_obj_t *s_detail_body;
+static lv_obj_t *s_settings_title_example;
+static lv_obj_t *s_settings_subtitle_example;
+static lv_obj_t *s_settings_title_size;
+static lv_obj_t *s_settings_subtitle_size;
+static lv_obj_t *s_settings_title_up;
+static lv_obj_t *s_settings_title_down;
+static lv_obj_t *s_settings_subtitle_up;
+static lv_obj_t *s_settings_subtitle_down;
 static attention_snapshot_t s_snapshot;
 static uint32_t s_selected_index;
 static char s_selected_id[ATTENTION_ID_MAX];
@@ -36,11 +46,147 @@ static const lv_color_t COLOR_RED = LV_COLOR_MAKE(255, 139, 151);
 #define LIST_ITEM_GAP (CARD_TITLE_SUBTITLE_GAP * 4)
 #define LIST_HEADER_TITLE_INSET 60
 #define LIST_HEADER_EDGE_INSET 10
+#define SETTINGS_NVS_NAMESPACE "attention_ui"
+#define SETTINGS_NVS_TITLE_KEY "title_font"
+#define SETTINGS_NVS_SUBTITLE_KEY "subtitle_font"
+
+typedef struct {
+    uint8_t size;
+    const lv_font_t *font;
+} font_option_t;
+
+static const font_option_t TITLE_FONT_OPTIONS[] = {
+    { 16, &lv_font_montserrat_16 },
+    { 18, &lv_font_montserrat_18 },
+    { 20, &lv_font_montserrat_20 },
+    { 22, &lv_font_montserrat_22 },
+    { 24, &lv_font_montserrat_24 },
+    { 26, &lv_font_montserrat_26 },
+    { 28, &lv_font_montserrat_28 },
+    { 30, &lv_font_montserrat_30 },
+    { 32, &lv_font_montserrat_32 },
+    { 34, &lv_font_montserrat_34 },
+    { 36, &lv_font_montserrat_36 },
+};
+
+static const font_option_t SUBTITLE_FONT_OPTIONS[] = {
+    { 14, &lv_font_montserrat_14 },
+    { 16, &lv_font_montserrat_16 },
+    { 18, &lv_font_montserrat_18 },
+    { 20, &lv_font_montserrat_20 },
+    { 22, &lv_font_montserrat_22 },
+    { 24, &lv_font_montserrat_24 },
+    { 26, &lv_font_montserrat_26 },
+    { 28, &lv_font_montserrat_28 },
+};
+
+static uint8_t s_title_font_index = 6;
+static uint8_t s_subtitle_font_index = 4;
+
+enum {
+    SETTINGS_ACTION_TITLE_UP = 1,
+    SETTINGS_ACTION_TITLE_DOWN,
+    SETTINGS_ACTION_SUBTITLE_UP,
+    SETTINGS_ACTION_SUBTITLE_DOWN,
+};
+
+static void update_settings_controls(void);
 
 static void set_common_text(lv_obj_t *label, const lv_font_t *font, lv_color_t color)
 {
     lv_obj_set_style_text_font(label, font, 0);
     lv_obj_set_style_text_color(label, color, 0);
+}
+
+static const font_option_t *current_title_option(void)
+{
+    return &TITLE_FONT_OPTIONS[s_title_font_index];
+}
+
+static const font_option_t *current_subtitle_option(void)
+{
+    return &SUBTITLE_FONT_OPTIONS[s_subtitle_font_index];
+}
+
+static uint8_t find_font_index(
+    const font_option_t *options,
+    size_t option_count,
+    uint8_t size,
+    uint8_t fallback
+)
+{
+    for (size_t index = 0; index < option_count; ++index) {
+        if (options[index].size == size) return (uint8_t)index;
+    }
+    return fallback;
+}
+
+static void load_font_settings(void)
+{
+    nvs_handle_t handle;
+    if (nvs_open(SETTINGS_NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) return;
+
+    uint8_t size = 0;
+    if (nvs_get_u8(handle, SETTINGS_NVS_TITLE_KEY, &size) == ESP_OK) {
+        s_title_font_index = find_font_index(
+            TITLE_FONT_OPTIONS,
+            sizeof(TITLE_FONT_OPTIONS) / sizeof(TITLE_FONT_OPTIONS[0]),
+            size,
+            s_title_font_index
+        );
+    }
+    if (nvs_get_u8(handle, SETTINGS_NVS_SUBTITLE_KEY, &size) == ESP_OK) {
+        s_subtitle_font_index = find_font_index(
+            SUBTITLE_FONT_OPTIONS,
+            sizeof(SUBTITLE_FONT_OPTIONS) / sizeof(SUBTITLE_FONT_OPTIONS[0]),
+            size,
+            s_subtitle_font_index
+        );
+    }
+    nvs_close(handle);
+}
+
+static void save_font_settings(void)
+{
+    nvs_handle_t handle;
+    if (nvs_open(SETTINGS_NVS_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK) return;
+
+    const esp_err_t title_result = nvs_set_u8(
+        handle,
+        SETTINGS_NVS_TITLE_KEY,
+        current_title_option()->size
+    );
+    const esp_err_t subtitle_result = nvs_set_u8(
+        handle,
+        SETTINGS_NVS_SUBTITLE_KEY,
+        current_subtitle_option()->size
+    );
+    if (title_result == ESP_OK && subtitle_result == ESP_OK) (void)nvs_commit(handle);
+    nvs_close(handle);
+}
+
+static void set_step_state(lv_obj_t *button, bool enabled)
+{
+    if (button == NULL) return;
+    if (enabled) lv_obj_clear_state(button, LV_STATE_DISABLED);
+    else lv_obj_add_state(button, LV_STATE_DISABLED);
+}
+
+static void apply_font_settings(void)
+{
+    const font_option_t *title = current_title_option();
+    const font_option_t *subtitle = current_subtitle_option();
+
+    for (uint32_t index = 0; index < CONFIG_CODEX_ATTENTION_MAX_ITEMS; ++index) {
+        if (s_card_titles[index] != NULL) set_common_text(s_card_titles[index], title->font, COLOR_TEXT);
+    }
+    if (s_detail_title != NULL) set_common_text(s_detail_title, title->font, COLOR_TEXT);
+    if (s_detail_meta != NULL) set_common_text(s_detail_meta, &lv_font_montserrat_16, COLOR_MUTED);
+    if (s_settings_title_example != NULL) {
+        set_common_text(s_settings_title_example, title->font, COLOR_TEXT);
+        set_common_text(s_settings_subtitle_example, subtitle->font, COLOR_TEXT);
+    }
+    update_settings_controls();
 }
 
 static void make_root(lv_obj_t *root)
@@ -52,11 +198,47 @@ static void make_root(lv_obj_t *root)
     lv_obj_set_style_pad_all(root, 0, 0);
 }
 
+static void settings_icon_clicked(lv_event_t *event);
+static void settings_back_clicked(lv_event_t *event);
+static void settings_step_clicked(lv_event_t *event);
+
+static lv_obj_t *create_action_button(
+    lv_obj_t *parent,
+    const char *text,
+    lv_coord_t width,
+    lv_coord_t height,
+    const lv_font_t *font,
+    lv_color_t color,
+    lv_event_cb_t callback,
+    void *user_data
+)
+{
+    lv_obj_t *button = lv_obj_create(parent);
+    lv_obj_remove_flag(button, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(button, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_size(button, width, height);
+    lv_obj_set_style_radius(button, 8, 0);
+    lv_obj_set_style_bg_color(button, COLOR_BORDER, 0);
+    lv_obj_set_style_bg_opa(button, LV_OPA_40, 0);
+    lv_obj_set_style_border_width(button, 1, 0);
+    lv_obj_set_style_border_color(button, COLOR_MUTED, 0);
+    lv_obj_set_style_pad_all(button, 0, 0);
+    lv_obj_set_style_opa(button, LV_OPA_COVER, 0);
+    lv_obj_set_style_opa(button, LV_OPA_50, LV_STATE_DISABLED);
+    lv_obj_add_event_cb(button, callback, LV_EVENT_CLICKED, user_data);
+
+    lv_obj_t *label = lv_label_create(button);
+    lv_label_set_text(label, text);
+    set_common_text(label, font, color);
+    lv_obj_center(label);
+    return button;
+}
+
 static lv_obj_t *create_badge(lv_obj_t *parent, const char *text, lv_color_t color)
 {
     lv_obj_t *label = lv_label_create(parent);
     lv_label_set_text(label, text);
-    set_common_text(label, &lv_font_montserrat_24, color);
+    set_common_text(label, &lv_font_montserrat_18, color);
     return label;
 }
 
@@ -141,7 +323,7 @@ static lv_obj_t *create_card(const attention_item_t *item, uint32_t index)
     lv_obj_set_width(title, lv_pct(100));
     lv_label_set_long_mode(title, LV_LABEL_LONG_WRAP);
     lv_label_set_text(title, item->title);
-    set_common_text(title, &lv_font_montserrat_36, COLOR_TEXT);
+    set_common_text(title, current_title_option()->font, COLOR_TEXT);
     s_card_titles[index] = title;
 
     char age[16];
@@ -152,7 +334,7 @@ static lv_obj_t *create_card(const attention_item_t *item, uint32_t index)
     lv_obj_set_width(meta_label, lv_pct(100));
     lv_label_set_long_mode(meta_label, LV_LABEL_LONG_DOT);
     lv_label_set_text(meta_label, meta);
-    set_common_text(meta_label, &lv_font_montserrat_28, COLOR_MUTED);
+    set_common_text(meta_label, current_subtitle_option()->font, COLOR_MUTED);
 
     lv_obj_t *badges = lv_obj_create(card);
     lv_obj_remove_flag(badges, LV_OBJ_FLAG_SCROLLABLE);
@@ -191,20 +373,43 @@ static void create_list_view(lv_obj_t *screen)
     lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(header, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-    lv_obj_t *title = lv_label_create(header);
-    lv_label_set_text(title, "Pinned, Unread");
-    set_common_text(title, &lv_font_montserrat_16, COLOR_TEXT);
+    lv_obj_t *cluster = lv_obj_create(header);
+    lv_obj_remove_flag(cluster, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_size(cluster, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(cluster, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(cluster, 0, 0);
+    lv_obj_set_style_pad_all(cluster, 0, 0);
+    lv_obj_set_style_pad_column(cluster, 8, 0);
+    lv_obj_set_flex_flow(cluster, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(cluster, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
 
-    s_status_dot = lv_obj_create(header);
+    s_status_dot = lv_obj_create(cluster);
     lv_obj_remove_flag(s_status_dot, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_size(s_status_dot, 11, 11);
     lv_obj_set_style_radius(s_status_dot, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(s_status_dot, COLOR_RED, 0);
     lv_obj_set_style_bg_opa(s_status_dot, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(s_status_dot, 0, 0);
-    s_count_label = lv_label_create(header);
+
+    lv_obj_t *title = lv_label_create(cluster);
+    lv_label_set_text(title, "Pinned, Unread");
+    set_common_text(title, &lv_font_montserrat_16, COLOR_TEXT);
+
+    s_count_label = lv_label_create(cluster);
+    lv_obj_set_width(s_count_label, 40);
     lv_label_set_text(s_count_label, "(--)");
     set_common_text(s_count_label, &lv_font_montserrat_16, COLOR_TEXT);
+
+    (void)create_action_button(
+        header,
+        LV_SYMBOL_SETTINGS,
+        42,
+        42,
+        &lv_font_montserrat_24,
+        COLOR_TEXT,
+        settings_icon_clicked,
+        NULL
+    );
 
     lv_obj_t *divider = lv_obj_create(s_list_view);
     lv_obj_remove_flag(divider, LV_OBJ_FLAG_SCROLLABLE);
@@ -248,7 +453,7 @@ static void create_detail_view(lv_obj_t *screen)
     lv_obj_set_width(s_detail_title, 350);
     lv_label_set_long_mode(s_detail_title, LV_LABEL_LONG_WRAP);
     lv_label_set_text(s_detail_title, "Loading…");
-    set_common_text(s_detail_title, &lv_font_montserrat_40, COLOR_TEXT);
+    set_common_text(s_detail_title, current_title_option()->font, COLOR_TEXT);
     lv_obj_align(s_detail_title, LV_ALIGN_TOP_LEFT, 0, 26);
 
     s_detail_meta = lv_label_create(header);
@@ -256,7 +461,7 @@ static void create_detail_view(lv_obj_t *screen)
     lv_label_set_long_mode(s_detail_meta, LV_LABEL_LONG_DOT);
     lv_label_set_text(s_detail_meta, "Codex");
     lv_obj_set_style_text_align(s_detail_meta, LV_TEXT_ALIGN_CENTER, 0);
-    set_common_text(s_detail_meta, &lv_font_montserrat_24, COLOR_MUTED);
+    set_common_text(s_detail_meta, &lv_font_montserrat_16, COLOR_MUTED);
     lv_obj_align(s_detail_meta, LV_ALIGN_TOP_MID, 0, 0);
 
     s_detail_body = lv_obj_create(s_detail_view);
@@ -273,14 +478,181 @@ static void create_detail_view(lv_obj_t *screen)
     lv_obj_set_width(s_detail_text, 348);
     lv_label_set_long_mode(s_detail_text, LV_LABEL_LONG_WRAP);
     lv_label_set_text(s_detail_text, "Loading latest text…");
-    lv_obj_set_style_text_line_space(s_detail_text, 14, 0);
-    set_common_text(s_detail_text, &lv_font_montserrat_32, COLOR_TEXT);
+    lv_obj_set_style_text_line_space(s_detail_text, 10, 0);
+    set_common_text(s_detail_text, &lv_font_montserrat_20, COLOR_TEXT);
 }
 
 static void scroll_detail_to_end(void)
 {
     lv_obj_update_layout(s_detail_body);
     lv_obj_scroll_to_y(s_detail_body, LV_COORD_MAX, LV_ANIM_OFF);
+}
+
+static void create_settings_font_row(
+    lv_obj_t *parent,
+    lv_coord_t y,
+    const char *caption,
+    const char *example,
+    bool title_row
+)
+{
+    lv_obj_t *caption_label = lv_label_create(parent);
+    lv_label_set_text(caption_label, caption);
+    set_common_text(caption_label, &lv_font_montserrat_16, COLOR_MUTED);
+    lv_obj_align(caption_label, LV_ALIGN_TOP_LEFT, 16, y);
+
+    lv_obj_t *example_label = lv_label_create(parent);
+    lv_obj_set_width(example_label, 250);
+    lv_label_set_long_mode(example_label, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(example_label, example);
+    set_common_text(
+        example_label,
+        title_row ? current_title_option()->font : current_subtitle_option()->font,
+        COLOR_TEXT
+    );
+    lv_obj_align(example_label, LV_ALIGN_TOP_LEFT, 16, y + 24);
+
+    lv_obj_t *size_label = lv_label_create(parent);
+    lv_obj_set_width(size_label, 80);
+    set_common_text(size_label, &lv_font_montserrat_14, COLOR_GREEN);
+    lv_obj_align(size_label, LV_ALIGN_TOP_LEFT, 16, y + 112);
+
+    const uintptr_t up_action = title_row
+        ? SETTINGS_ACTION_TITLE_UP
+        : SETTINGS_ACTION_SUBTITLE_UP;
+    const uintptr_t down_action = title_row
+        ? SETTINGS_ACTION_TITLE_DOWN
+        : SETTINGS_ACTION_SUBTITLE_DOWN;
+    lv_obj_t *up_button = create_action_button(
+        parent,
+        LV_SYMBOL_UP,
+        42,
+        42,
+        &lv_font_montserrat_24,
+        COLOR_TEXT,
+        settings_step_clicked,
+        (void *)up_action
+    );
+    lv_obj_align(up_button, LV_ALIGN_TOP_RIGHT, -62, y + 28);
+
+    lv_obj_t *down_button = create_action_button(
+        parent,
+        LV_SYMBOL_DOWN,
+        42,
+        42,
+        &lv_font_montserrat_24,
+        COLOR_TEXT,
+        settings_step_clicked,
+        (void *)down_action
+    );
+    lv_obj_align(down_button, LV_ALIGN_TOP_RIGHT, -12, y + 28);
+
+    if (title_row) {
+        s_settings_title_example = example_label;
+        s_settings_title_size = size_label;
+        s_settings_title_up = up_button;
+        s_settings_title_down = down_button;
+    } else {
+        s_settings_subtitle_example = example_label;
+        s_settings_subtitle_size = size_label;
+        s_settings_subtitle_up = up_button;
+        s_settings_subtitle_down = down_button;
+    }
+}
+
+static void create_settings_view(lv_obj_t *screen)
+{
+    s_settings_view = lv_obj_create(screen);
+    make_root(s_settings_view);
+    lv_obj_add_flag(s_settings_view, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_t *back_button = create_action_button(
+        s_settings_view,
+        LV_SYMBOL_LEFT,
+        48,
+        42,
+        &lv_font_montserrat_24,
+        COLOR_TEXT,
+        settings_back_clicked,
+        NULL
+    );
+    lv_obj_align(back_button, LV_ALIGN_TOP_LEFT, 10, 6);
+
+    lv_obj_t *heading = lv_label_create(s_settings_view);
+    lv_obj_set_width(heading, 250);
+    lv_label_set_text(heading, "Settings");
+    lv_obj_set_style_text_align(heading, LV_TEXT_ALIGN_CENTER, 0);
+    set_common_text(heading, &lv_font_montserrat_24, COLOR_TEXT);
+    lv_obj_align(heading, LV_ALIGN_TOP_MID, 0, 14);
+
+    lv_obj_t *content = lv_obj_create(s_settings_view);
+    lv_obj_remove_flag(content, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_size(content, 390, 420);
+    lv_obj_align(content, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_obj_set_style_bg_opa(content, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(content, 0, 0);
+    lv_obj_set_style_pad_all(content, 0, 0);
+
+    create_settings_font_row(content, 22, "Title size", "Example thread title", true);
+    create_settings_font_row(content, 216, "Subtitle size", "Example project  |  2h", false);
+    update_settings_controls();
+}
+
+static void update_settings_controls(void)
+{
+    if (s_settings_title_example == NULL || s_settings_subtitle_example == NULL) return;
+
+    const font_option_t *title = current_title_option();
+    const font_option_t *subtitle = current_subtitle_option();
+    set_common_text(s_settings_title_example, title->font, COLOR_TEXT);
+    set_common_text(s_settings_subtitle_example, subtitle->font, COLOR_MUTED);
+    lv_label_set_text_fmt(s_settings_title_size, "%u px", (unsigned)title->size);
+    lv_label_set_text_fmt(s_settings_subtitle_size, "%u px", (unsigned)subtitle->size);
+    set_step_state(
+        s_settings_title_up,
+        s_title_font_index + 1U < sizeof(TITLE_FONT_OPTIONS) / sizeof(TITLE_FONT_OPTIONS[0])
+    );
+    set_step_state(s_settings_title_down, s_title_font_index > 0);
+    set_step_state(
+        s_settings_subtitle_up,
+        s_subtitle_font_index + 1U < sizeof(SUBTITLE_FONT_OPTIONS) / sizeof(SUBTITLE_FONT_OPTIONS[0])
+    );
+    set_step_state(s_settings_subtitle_down, s_subtitle_font_index > 0);
+}
+
+static void settings_step_clicked(lv_event_t *event)
+{
+    if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+    const uintptr_t action = (uintptr_t)lv_event_get_user_data(event);
+
+    if (action == SETTINGS_ACTION_TITLE_UP) {
+        if (s_title_font_index + 1U < sizeof(TITLE_FONT_OPTIONS) / sizeof(TITLE_FONT_OPTIONS[0])) {
+            s_title_font_index++;
+        }
+    } else if (action == SETTINGS_ACTION_TITLE_DOWN) {
+        if (s_title_font_index > 0) s_title_font_index--;
+    } else if (action == SETTINGS_ACTION_SUBTITLE_UP) {
+        if (s_subtitle_font_index + 1U < sizeof(SUBTITLE_FONT_OPTIONS) / sizeof(SUBTITLE_FONT_OPTIONS[0])) {
+            s_subtitle_font_index++;
+        }
+    } else if (action == SETTINGS_ACTION_SUBTITLE_DOWN) {
+        if (s_subtitle_font_index > 0) s_subtitle_font_index--;
+    } else {
+        return;
+    }
+
+    save_font_settings();
+    apply_font_settings();
+}
+
+static void settings_icon_clicked(lv_event_t *event)
+{
+    if (lv_event_get_code(event) == LV_EVENT_CLICKED) attention_ui_show_settings();
+}
+
+static void settings_back_clicked(lv_event_t *event)
+{
+    if (lv_event_get_code(event) == LV_EVENT_CLICKED) attention_ui_show_list();
 }
 
 void attention_ui_init(attention_ui_open_callback_t open_callback, void *context)
@@ -292,6 +664,7 @@ void attention_ui_init(attention_ui_open_callback_t open_callback, void *context
     memset(s_card_titles, 0, sizeof(s_card_titles));
     s_selected_id[0] = '\0';
     s_detail_id[0] = '\0';
+    load_font_settings();
 
     lv_obj_t *screen = lv_screen_active();
     lv_obj_set_style_bg_color(screen, COLOR_BG, 0);
@@ -300,6 +673,7 @@ void attention_ui_init(attention_ui_open_callback_t open_callback, void *context
 
     create_list_view(screen);
     create_detail_view(screen);
+    create_settings_view(screen);
 }
 
 void attention_ui_render(const attention_snapshot_t *snapshot)
@@ -347,8 +721,8 @@ void attention_ui_render(const attention_snapshot_t *snapshot)
             ? "Inbox clear\nNo unread, pinned, or waiting threads."
             : "No cached threads\nCheck the Mac bridge and Wi-Fi.");
         lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_set_style_text_line_space(label, 16, 0);
-        set_common_text(label, &lv_font_montserrat_32, COLOR_MUTED);
+        lv_obj_set_style_text_line_space(label, 10, 0);
+        set_common_text(label, &lv_font_montserrat_20, COLOR_MUTED);
         lv_obj_center(label);
     } else {
         for (uint32_t index = 0; index < snapshot->count; ++index) {
@@ -387,8 +761,17 @@ void attention_ui_show_list(void)
 {
     s_detail_id[0] = '\0';
     lv_obj_add_flag(s_detail_view, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_settings_view, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(s_list_view, LV_OBJ_FLAG_HIDDEN);
     apply_selection(true);
+}
+
+void attention_ui_show_settings(void)
+{
+    lv_obj_add_flag(s_list_view, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_detail_view, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(s_settings_view, LV_OBJ_FLAG_HIDDEN);
+    apply_font_settings();
 }
 
 void attention_ui_show_detail_loading(const char *thread_id)
@@ -430,6 +813,11 @@ void attention_ui_show_detail_error(const char *thread_id, const char *message)
 bool attention_ui_is_detail_visible(void)
 {
     return !lv_obj_has_flag(s_detail_view, LV_OBJ_FLAG_HIDDEN);
+}
+
+bool attention_ui_is_settings_visible(void)
+{
+    return !lv_obj_has_flag(s_settings_view, LV_OBJ_FLAG_HIDDEN);
 }
 
 bool attention_ui_is_detail_for(const char *thread_id)
