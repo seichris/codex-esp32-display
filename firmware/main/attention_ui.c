@@ -8,7 +8,7 @@
 static lv_obj_t *s_list_view;
 static lv_obj_t *s_detail_view;
 static lv_obj_t *s_count_label;
-static lv_obj_t *s_status_label;
+static lv_obj_t *s_status_dot;
 static lv_obj_t *s_list;
 static lv_obj_t *s_cards[CONFIG_CODEX_ATTENTION_MAX_ITEMS];
 static lv_obj_t *s_detail_kind;
@@ -192,7 +192,7 @@ static void create_list_view(lv_obj_t *screen)
 
     lv_obj_t *header = lv_obj_create(s_list_view);
     lv_obj_remove_flag(header, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(header, lv_pct(100), 92);
+    lv_obj_set_size(header, lv_pct(100), 78);
     lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_set_style_bg_opa(header, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(header, 0, 0);
@@ -200,15 +200,19 @@ static void create_list_view(lv_obj_t *screen)
     lv_obj_set_style_pad_top(header, 17, 0);
     lv_obj_set_style_pad_bottom(header, 8, 0);
 
-    lv_obj_t *eyebrow = lv_label_create(header);
-    lv_label_set_text(eyebrow, "CODEX INBOX  |  BOOT NEXT  ·  PWR OPEN");
-    set_common_text(eyebrow, &lv_font_montserrat_12, COLOR_MUTED);
-    lv_obj_align(eyebrow, LV_ALIGN_TOP_LEFT, 0, 0);
-
     lv_obj_t *title = lv_label_create(header);
     lv_label_set_text(title, "Needs attention");
     set_common_text(title, &lv_font_montserrat_24, COLOR_TEXT);
     lv_obj_align(title, LV_ALIGN_BOTTOM_LEFT, 0, -3);
+
+    s_status_dot = lv_obj_create(header);
+    lv_obj_remove_flag(s_status_dot, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_size(s_status_dot, 11, 11);
+    lv_obj_set_style_radius(s_status_dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(s_status_dot, COLOR_RED, 0);
+    lv_obj_set_style_bg_opa(s_status_dot, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_status_dot, 0, 0);
+    lv_obj_align_to(s_status_dot, title, LV_ALIGN_OUT_RIGHT_MID, 10, 0);
 
     lv_obj_t *count_pill = lv_obj_create(header);
     lv_obj_remove_flag(count_pill, LV_OBJ_FLAG_SCROLLABLE);
@@ -225,15 +229,8 @@ static void create_list_view(lv_obj_t *screen)
     set_common_text(s_count_label, &lv_font_montserrat_16, COLOR_TEXT);
     lv_obj_center(s_count_label);
 
-    s_status_label = lv_label_create(s_list_view);
-    lv_obj_set_width(s_status_label, 374);
-    lv_label_set_long_mode(s_status_label, LV_LABEL_LONG_DOT);
-    lv_label_set_text(s_status_label, "Connecting to bridge…");
-    set_common_text(s_status_label, &lv_font_montserrat_12, COLOR_MUTED);
-    lv_obj_align(s_status_label, LV_ALIGN_TOP_MID, 0, 88);
-
     s_list = lv_obj_create(s_list_view);
-    lv_obj_set_size(s_list, 390, 382);
+    lv_obj_set_size(s_list, 390, 405);
     lv_obj_align(s_list, LV_ALIGN_BOTTOM_MID, 0, -9);
     lv_obj_set_style_bg_opa(s_list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_list, 0, 0);
@@ -346,19 +343,9 @@ void attention_ui_render(const attention_snapshot_t *snapshot)
     else snprintf(count, sizeof(count), "%lu", (unsigned long)snapshot->total_count);
     lv_label_set_text(s_count_label, count);
 
-    if (snapshot->source_error[0] != '\0') {
-        lv_label_set_text_fmt(s_status_label, "BRIDGE ERROR  |  %s", snapshot->source_error);
-        lv_obj_set_style_text_color(s_status_label, COLOR_RED, 0);
-    } else if (!snapshot->desktop_state_available) {
-        lv_label_set_text(s_status_label, "CONNECTED  |  unread state unavailable");
-        lv_obj_set_style_text_color(s_status_label, COLOR_AMBER, 0);
-    } else if (snapshot->truncated) {
-        lv_label_set_text(s_status_label, "CONNECTED  |  priority list truncated");
-        lv_obj_set_style_text_color(s_status_label, COLOR_GREEN, 0);
-    } else {
-        lv_label_set_text(s_status_label, "CONNECTED  |  live");
-        lv_obj_set_style_text_color(s_status_label, COLOR_GREEN, 0);
-    }
+    const bool status_ok = snapshot->source_error[0] == '\0'
+        && snapshot->desktop_state_available;
+    lv_obj_set_style_bg_color(s_status_dot, status_ok ? COLOR_GREEN : COLOR_RED, 0);
 
     memset(s_cards, 0, sizeof(s_cards));
     lv_obj_clean(s_list);

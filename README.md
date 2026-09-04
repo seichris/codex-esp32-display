@@ -49,6 +49,8 @@ The bridge has no runtime npm dependencies.
 - fetches long thread text in a separate FreeRTOS task, so the UI remains usable;
 - discards stale detail responses after the user changes threads;
 - keeps the last good list when Wi-Fi or the bridge temporarily fails.
+- plays a short two-tone chime once when a new attention item or attention reason
+  appears; audio initialization failure leaves the rest of the device usable.
 
 ## Architecture
 
