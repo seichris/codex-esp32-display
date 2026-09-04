@@ -50,14 +50,28 @@ rl.on('line', line => {
     maxItems: 30,
     attentionFilter: 'all',
     pollIntervalMs: 60_000,
-  }, { logger: { error() {}, log() {} } });
+  }, {
+    logger: { error() {}, log() {} },
+    desktopController: {
+      async state() {
+        return {
+          threadId: PINNED,
+          focusConfidence: 'inferred',
+          voiceState: 'muted',
+          capabilities: { desktopFocus: true, desktopVoiceHotkey: true },
+        };
+      },
+    },
+  });
 
   try {
     await service.start();
     assert.equal(service.connected, true);
-    assert.deepEqual(service.snapshot.items.map((item) => item.id), [WAITING, UNREAD, PINNED]);
+    assert.deepEqual(service.snapshot.items.map((item) => item.id), [WAITING, UNREAD]);
     assert.equal(service.snapshot.items[1].unread, true);
-    assert.equal(service.snapshot.items[2].pinned, true);
+    assert.equal(service.snapshot.currentThread.id, PINNED);
+    assert.equal(service.snapshot.currentThread.focusConfidence, 'inferred');
+    assert.equal(service.snapshot.capabilities.desktopVoiceHotkey, true);
     assert.equal(service.snapshot.diagnostics.desktopStateAvailable, true);
 
     const detail = await service.latestThread(WAITING);

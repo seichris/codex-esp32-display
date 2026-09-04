@@ -10,6 +10,7 @@ final class StatusItemController: NSObject {
 
     private let stateItem = NSMenuItem()
     private let healthItem = NSMenuItem()
+    private let voiceItem = NSMenuItem()
     private let toggleItem = NSMenuItem()
     private let dashboardItem = NSMenuItem()
 
@@ -54,6 +55,8 @@ final class StatusItemController: NSObject {
         healthItem.isEnabled = false
         menu.addItem(stateItem)
         menu.addItem(healthItem)
+        voiceItem.isEnabled = false
+        menu.addItem(voiceItem)
         menu.addItem(.separator())
 
         toggleItem.target = self
@@ -81,6 +84,14 @@ final class StatusItemController: NSObject {
         logsItem.target = self
         menu.addItem(logsItem)
 
+        let voiceSettingsItem = NSMenuItem(
+            title: "Voice Settings…",
+            action: #selector(openVoiceSettings),
+            keyEquivalent: ","
+        )
+        voiceSettingsItem.target = self
+        menu.addItem(voiceSettingsItem)
+
         menu.addItem(.separator())
 
         let quitItem = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
@@ -98,6 +109,14 @@ final class StatusItemController: NSObject {
         healthItem.title = bridge.health.title
         healthItem.image = NSImage(
             systemSymbolName: healthSymbol,
+            accessibilityDescription: nil
+        )
+
+        voiceItem.title = bridge.desktopVoiceController.statusTitle
+        voiceItem.image = NSImage(
+            systemSymbolName: bridge.desktopVoiceController.voiceState == "listening"
+                ? "mic.fill"
+                : "mic.slash",
             accessibilityDescription: nil
         )
 
@@ -137,6 +156,10 @@ final class StatusItemController: NSObject {
 
     @objc private func revealLogs() {
         bridge.revealLogs()
+    }
+
+    @objc private func openVoiceSettings() {
+        bridge.openVoiceSettings()
     }
 
     @objc private func quit() {

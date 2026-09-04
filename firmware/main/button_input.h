@@ -5,8 +5,10 @@
 
 typedef enum {
     BUTTON_INPUT_NONE = 0,
-    BUTTON_INPUT_NEXT,
-    BUTTON_INPUT_SELECT,
+    BUTTON_INPUT_BOOT_SHORT,
+    BUTTON_INPUT_BOOT_LONG,
+    BUTTON_INPUT_PWR_SHORT,
+    BUTTON_INPUT_PWR_LONG,
 } button_input_event_t;
 
 esp_err_t button_input_init(void);

@@ -22,7 +22,7 @@ struct CodexESP32DisplayApp: App {
 
     var body: some Scene {
         Settings {
-            EmptyView()
+            VoiceSettingsView()
         }
     }
 }

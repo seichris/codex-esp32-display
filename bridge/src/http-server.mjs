@@ -27,6 +27,67 @@ function sendJson(response, statusCode, body) {
   response.end(payload);
 }
 
+const JSON_BODY_LIMIT = 4096;
+
+async function readJsonBody(request) {
+  const contentType = String(request.headers['content-type'] ?? '').toLowerCase();
+  if (!contentType.startsWith('application/json')) {
+    const error = new Error('Content-Type must be application/json.');
+    error.code = 'unsupported_media_type';
+    error.statusCode = 415;
+    throw error;
+  }
+  const declared = Number.parseInt(String(request.headers['content-length'] ?? '0'), 10);
+  if (Number.isFinite(declared) && declared > JSON_BODY_LIMIT) {
+    const error = new Error('Request body is too large.');
+    error.code = 'request_too_large';
+    error.statusCode = 413;
+    throw error;
+  }
+
+  const chunks = [];
+  let length = 0;
+  for await (const chunk of request) {
+    length += chunk.length;
+    if (length > JSON_BODY_LIMIT) {
+      const error = new Error('Request body is too large.');
+      error.code = 'request_too_large';
+      error.statusCode = 413;
+      throw error;
+    }
+    chunks.push(chunk);
+  }
+  try {
+    const value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error();
+    return value;
+  } catch {
+    const error = new Error('Request body must be a JSON object.');
+    error.code = 'invalid_json';
+    error.statusCode = 400;
+    throw error;
+  }
+}
+
+function exactKeys(value, allowed) {
+  const keys = Object.keys(value).sort();
+  return keys.length === allowed.length && keys.every((key, index) => key === [...allowed].sort()[index]);
+}
+
+function validId(value, maxLength = 160) {
+  return typeof value === 'string'
+    && value.length >= 1
+    && value.length <= maxLength
+    && /^[A-Za-z0-9._:-]+$/.test(value);
+}
+
+function invalidRequest(message) {
+  const error = new Error(message);
+  error.code = 'invalid_request';
+  error.statusCode = 400;
+  return error;
+}
+
 function latestThreadId(pathname) {
   const match = pathname.match(/^\/api\/v1\/threads\/([^/]+)\/latest$/);
   if (!match) return null;
@@ -73,6 +134,34 @@ export function createBridgeServer({ service, token, logger = console }) {
         return;
       }
 
+      if (request.method === 'GET' && url.pathname === '/api/v1/desktop/state') {
+        sendJson(response, 200, await service.desktopState());
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/api/v1/desktop/focus') {
+        const body = await readJsonBody(request);
+        if (!exactKeys(body, ['requestId', 'threadId'])
+            || !validId(body.threadId, 160)
+            || !validId(body.requestId, 96)) {
+          throw invalidRequest('Expected only valid threadId and requestId fields.');
+        }
+        sendJson(response, 200, await service.focusDesktop(body));
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/api/v1/desktop/voice') {
+        const body = await readJsonBody(request);
+        if (!exactKeys(body, ['command', 'requestId', 'threadId'])
+            || !validId(body.threadId, 160)
+            || !validId(body.requestId, 96)
+            || !['start-or-resume', 'mute'].includes(body.command)) {
+          throw invalidRequest('Expected valid threadId, requestId, and voice command fields.');
+        }
+        sendJson(response, 200, await service.voiceDesktop(body));
+        return;
+      }
+
       const threadId = request.method === 'GET' ? latestThreadId(url.pathname) : null;
       if (threadId) {
         try {
@@ -94,8 +183,13 @@ export function createBridgeServer({ service, token, logger = console }) {
 
       sendJson(response, 404, { error: 'not_found' });
     })().catch((error) => {
-      logger.error(error);
-      if (!response.headersSent) sendJson(response, 500, { error: 'internal_error' });
+      if ((error?.statusCode ?? 500) >= 500) logger.error(error);
+      if (!response.headersSent) {
+        sendJson(response, error?.statusCode ?? 500, {
+          error: error?.code ?? 'internal_error',
+          ...(error?.message ? { message: error.message } : {}),
+        });
+      }
       else response.destroy(error);
     });
   });

@@ -65,6 +65,7 @@ final class BridgeController: ObservableObject {
     let endpoint = URL(string: "http://127.0.0.1:5180/api/v1/attention")!
     let dashboardURL = URL(string: "http://127.0.0.1:5180/")!
     let logURL: URL
+    let desktopVoiceController = DesktopVoiceController()
 
     private let bridgeRoot: URL
     private var process: Process?
@@ -137,6 +138,10 @@ final class BridgeController: ObservableObject {
             if let codexURL = Self.resolveCodex() {
                 environment["CODEX_BIN"] = codexURL.path
             }
+            if let control = desktopVoiceController.environment {
+                environment["CODEX_DESKTOP_CONTROL_DIR"] = control.directory
+                environment["CODEX_DESKTOP_CONTROL_TOKEN"] = control.token
+            }
             child.environment = environment
             child.terminationHandler = { [weak self] terminatedProcess in
                 Task { @MainActor [weak self] in
@@ -187,6 +192,11 @@ final class BridgeController: ObservableObject {
 
     func revealLogs() {
         NSWorkspace.shared.activateFileViewerSelecting([logURL])
+    }
+
+    func openVoiceSettings() {
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        NSApplication.shared.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
     }
 
     private func processDidTerminate(status: Int32) {

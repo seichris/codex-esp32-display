@@ -3,7 +3,7 @@
 ## Outcome
 
 Turn the Waveshare ESP32-S3-Touch-AMOLED-2.06 into a USB microphone and
-physical controller for ChatGPT Desktop Voice in Codex tasks.
+physical controller for Codex Desktop Voice.
 
 The intended interaction is:
 
@@ -14,28 +14,47 @@ The intended interaction is:
 4. Hold either physical button for one second again to mute the microphone.
    The Voice Chat remains open so its reply is not cut off.
 5. Hold either button again to resume the microphone. Ending the Voice Chat
-   remains an explicit action in ChatGPT Desktop for the first version.
+   remains an explicit action in Codex Desktop for the first version.
 
 The list also gains a fixed bottom card for the current Desktop/Voice thread.
 The first touch on that card focuses it without opening details. Touching the
 same card again, without selecting another thread in between, opens its detail
 view.
 
+## Implementation status
+
+Implemented on the `desktop-codex-voice` branch:
+
+- authenticated bridge endpoints for Desktop state, focus, and Voice control;
+- a private per-launch bridge-to-companion control channel;
+- configurable thread URL template and Voice keyboard shortcut on macOS;
+- ESP32-S3 USB Audio Class microphone streaming at 48 kHz mono/16-bit;
+- fail-closed live/silence gating, with mute controlled locally on the device;
+- one-second long-press events for BOOT and AXP2101 PWR;
+- the fixed current/target thread card and two-tap focus/detail interaction.
+
+The source-level implementation and automated builds/tests do not prove four
+physical/interactive behaviors: USB audio enumeration and sample quality on the
+actual board, the Codex Desktop deep link selecting the exact task, the
+configured Voice shortcut opening Voice in that task, or the exact AXP2101 PWR
+long-press behavior on the target board revision. Those remain acceptance gates
+before calling the feature production-ready.
+
 ## Feasibility summary
 
-The complete experience is feasible, but two parts require short physical and
-Desktop-integration spikes before implementation can be considered committed.
+The complete experience is feasible, but several parts require short physical and
+Desktop-integration checks before it can be considered production-ready.
 
 | Capability | Assessment | Evidence or required proof |
 | --- | --- | --- |
-| Capture the board microphones | Feasible | The Waveshare BSP exposes `bsp_audio_codec_microphone_init()` for the ES7210 input codec. |
-| Appear as a macOS microphone | Feasible, needs a prototype | ESP32-S3 supports native USB device operation. The project must add a TinyUSB device/UAC implementation; its current `espressif/usb` dependency is a USB host stack, not the required audio-device implementation. |
-| Start Desktop Voice | Feasible with a configured Voice hotkey | OpenAI documents a configurable Voice Chat hotkey. Generic-device start/stop control is not otherwise documented. |
-| Toggle microphone capture | Feasible | Keep the USB microphone enumerated continuously and send live PCM only in the listening state; send silence while muted. This does not require an undocumented Voice API. |
-| One-second BOOT hold | Feasible | BOOT is GPIO0 and its live level is already polled and debounced. |
-| One-second PWR hold | Conditional | Main currently receives only the AXP2101 short-press latch after the fact. We must prove a safe press/release or long-press interrupt path that does not collide with PMIC shutdown behavior. |
-| Fixed current-thread card and two-stage touch | Feasible | This is entirely within the LVGL UI and device protocol. |
-| Determine and focus the exact current Desktop task | Conditional | App Server exposes threads but not the ChatGPT Desktop window's selected task. OpenAI's supported Codex Micro integration can switch and focus chats, but the public documentation does not describe that integration as a generic HID/UAC protocol. A supported deep link or stable macOS Accessibility path must be proven. |
+| Capture the board microphones | Implemented; needs a physical audio check | The Waveshare BSP exposes `bsp_audio_codec_microphone_init()` for the ES7210 input codec. |
+| Appear as a macOS microphone | Implemented; needs USB enumeration and audio checks | The firmware uses Espressif's USB Audio Class device component with macOS compatibility enabled. |
+| Start Desktop Voice | Implemented with a configured Voice hotkey; needs an interactive check | OpenAI documents a configurable Voice Chat hotkey. Generic-device start/stop control is not otherwise documented. |
+| Toggle microphone capture | Implemented; needs a physical privacy check | The USB microphone stays enumerated and sends live PCM only in the listening state; otherwise it sends silence. |
+| One-second BOOT hold | Implemented; needs a physical check | BOOT is GPIO0 and its live level is polled and debounced. |
+| One-second PWR hold | Implemented; needs a physical check | The AXP2101 one-second long-press IRQ is enabled independently of its longer hardware shutdown threshold. |
+| Fixed current-thread card and two-stage touch | Implemented | This is entirely within the LVGL UI and device protocol. |
+| Determine and focus the exact current Desktop task | Partially implemented | The installed Codex build contains the `codex://threads/{id}` route, but App Server does not expose the window's selected task. The companion therefore labels URL-based focus as `inferred`, never `confirmed`. |
 
 Therefore the project should proceed through the feasibility gates below. Do
 not represent a thread as "current on Mac" or unmute the microphone for a newly
@@ -467,7 +486,7 @@ Test on the exact Waveshare board and current ChatGPT Desktop build:
 | Either long hold while listening | PCM becomes silence locally before the network acknowledgement. |
 | Fixed card first touch | Focus/select only; detail remains closed. |
 | Fixed card second consecutive touch | Detail opens for that exact ID. |
-| Desktop task changed with mouse | Fixed row updates or downgrades honestly to inferred/unavailable. |
+| Desktop task changed with mouse | Not observable through the current public surface; the card remains an inferred `VOICE TARGET`, not `CURRENT ON MAC`. |
 | Selected thread cannot be focused | Microphone remains silent; explicit error appears. |
 | Bridge/Wi-Fi disappears while listening | Local microphone gate closes immediately. |
 | USB cable is removed/reinserted | Clear status, safe silence, clean re-enumeration; no automatic unmute. |

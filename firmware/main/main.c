@@ -9,12 +9,17 @@
 #include "button_input.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_random.h"
+#include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
 #include "sdkconfig.h"
 #include "wifi_manager.h"
+#include "usb_microphone.h"
+#include "voice_audio.h"
+#include "voice_control.h"
 
 static const char *TAG = "codex_display";
 
@@ -22,7 +27,21 @@ typedef struct {
     char thread_id[ATTENTION_ID_MAX];
 } detail_request_t;
 
+typedef enum {
+    VOICE_REQUEST_FOCUS = 0,
+    VOICE_REQUEST_START,
+    VOICE_REQUEST_MUTE,
+} voice_request_kind_t;
+
+typedef struct {
+    voice_request_kind_t kind;
+    char thread_id[ATTENTION_ID_MAX];
+} voice_request_t;
+
 static QueueHandle_t s_detail_queue;
+static QueueHandle_t s_voice_queue;
+static voice_control_t s_voice_control;
+static portMUX_TYPE s_voice_control_lock = portMUX_INITIALIZER_UNLOCKED;
 
 static uint8_t attention_reason_mask(const attention_item_t *item)
 {
@@ -92,6 +111,37 @@ static void queue_detail(const char *thread_id, void *context)
     (void)xQueueOverwrite(s_detail_queue, &request);
 }
 
+static void queue_focus(const char *thread_id, void *context)
+{
+    (void)context;
+    if (thread_id == NULL || thread_id[0] == '\0' || s_voice_queue == NULL) return;
+    const voice_request_t request = {
+        .kind = VOICE_REQUEST_FOCUS,
+    };
+    voice_request_t queued = request;
+    strlcpy(queued.thread_id, thread_id, sizeof(queued.thread_id));
+    (void)xQueueSend(s_voice_queue, &queued, 0);
+}
+
+static void set_voice_ui(const char *thread_id, attention_voice_state_t state)
+{
+    bsp_display_lock(0);
+    attention_ui_set_voice_state(thread_id, state);
+    bsp_display_unlock();
+}
+
+static void make_request_id(char *output, size_t output_size, const char *prefix)
+{
+    snprintf(
+        output,
+        output_size,
+        "%s-%08lx-%08lx",
+        prefix,
+        (unsigned long)xTaskGetTickCount(),
+        (unsigned long)esp_random()
+    );
+}
+
 static void poll_task(void *argument)
 {
     (void)argument;
@@ -157,6 +207,107 @@ static void detail_task(void *argument)
     }
 }
 
+static void voice_task(void *argument)
+{
+    (void)argument;
+    voice_request_t request;
+
+    while (true) {
+        if (xQueueReceive(s_voice_queue, &request, portMAX_DELAY) != pdTRUE) continue;
+        if (!wifi_manager_wait_connected(8000)) {
+            voice_audio_set_listening(false);
+            set_voice_ui(request.thread_id, ATTENTION_VOICE_ERROR);
+            continue;
+        }
+
+        char request_id[97];
+        attention_desktop_state_t response = { 0 };
+        if (request.kind == VOICE_REQUEST_FOCUS) {
+            set_voice_ui(request.thread_id, ATTENTION_VOICE_FOCUSING);
+            make_request_id(request_id, sizeof(request_id), "focus");
+            esp_err_t result = attention_client_focus(request.thread_id, request_id, &response);
+            if (result != ESP_OK
+                || strcmp(response.request_id, request_id) != 0
+                || strcmp(response.thread_id, request.thread_id) != 0) {
+                bsp_display_lock(0);
+                attention_ui_fixed_focus_failed();
+                attention_ui_set_voice_state(request.thread_id, ATTENTION_VOICE_ERROR);
+                bsp_display_unlock();
+            }
+            continue;
+        }
+
+        if (request.kind == VOICE_REQUEST_MUTE) {
+            set_voice_ui(request.thread_id, ATTENTION_VOICE_MUTED);
+            make_request_id(request_id, sizeof(request_id), "mute");
+            esp_err_t result = attention_client_voice(
+                request.thread_id,
+                "mute",
+                request_id,
+                &response
+            );
+            if (result != ESP_OK) {
+                ESP_LOGW(TAG, "Desktop mute acknowledgement failed: %s", esp_err_to_name(result));
+            }
+            continue;
+        }
+
+        set_voice_ui(request.thread_id, ATTENTION_VOICE_FOCUSING);
+        make_request_id(request_id, sizeof(request_id), "focus");
+        esp_err_t result = attention_client_focus(request.thread_id, request_id, &response);
+        taskENTER_CRITICAL(&s_voice_control_lock);
+        voice_control_action_t action = voice_control_focus_result(
+            &s_voice_control,
+            result == ESP_OK && strcmp(response.request_id, request_id) == 0,
+            response.thread_id
+        );
+        const bool cancelled = s_voice_control.state == ATTENTION_VOICE_MUTED
+            && strcmp(s_voice_control.thread_id, request.thread_id) == 0;
+        taskEXIT_CRITICAL(&s_voice_control_lock);
+        if (action != VOICE_CONTROL_ACTION_START) {
+            voice_audio_set_listening(false);
+            if (!cancelled) set_voice_ui(request.thread_id, ATTENTION_VOICE_ERROR);
+            continue;
+        }
+
+        set_voice_ui(request.thread_id, ATTENTION_VOICE_STARTING);
+        // Give the Desktop deep link a bounded moment to finish switching tasks
+        // before sending the global Voice shortcut.
+        vTaskDelay(pdMS_TO_TICKS(400));
+        taskENTER_CRITICAL(&s_voice_control_lock);
+        const bool should_start = s_voice_control.state == ATTENTION_VOICE_STARTING
+            && strcmp(s_voice_control.thread_id, request.thread_id) == 0;
+        taskEXIT_CRITICAL(&s_voice_control_lock);
+        if (!should_start) continue;
+        make_request_id(request_id, sizeof(request_id), "voice");
+        memset(&response, 0, sizeof(response));
+        result = attention_client_voice(
+            request.thread_id,
+            "start-or-resume",
+            request_id,
+            &response
+        );
+        const bool acknowledged = result == ESP_OK
+            && strcmp(response.request_id, request_id) == 0
+            && strcmp(response.thread_id, request.thread_id) == 0
+            && response.voice_state == ATTENTION_VOICE_LISTENING;
+        taskENTER_CRITICAL(&s_voice_control_lock);
+        const bool still_requested = s_voice_control.state == ATTENTION_VOICE_STARTING
+            && strcmp(s_voice_control.thread_id, request.thread_id) == 0;
+        if (still_requested) {
+            voice_control_voice_result(&s_voice_control, acknowledged, acknowledged);
+        }
+        taskEXIT_CRITICAL(&s_voice_control_lock);
+        voice_audio_set_listening(acknowledged && still_requested);
+        set_voice_ui(
+            request.thread_id,
+            still_requested
+                ? (acknowledged ? ATTENTION_VOICE_LISTENING : ATTENTION_VOICE_ERROR)
+                : ATTENTION_VOICE_MUTED
+        );
+    }
+}
+
 static void button_task(void *argument)
 {
     (void)argument;
@@ -169,7 +320,7 @@ static void button_task(void *argument)
         }
 
         bsp_display_lock(0);
-        if (event == BUTTON_INPUT_NEXT) {
+        if (event == BUTTON_INPUT_BOOT_SHORT) {
             if (attention_ui_is_settings_visible()) {
                 attention_ui_show_list();
             } else if (attention_ui_is_detail_visible()) {
@@ -178,11 +329,37 @@ static void button_task(void *argument)
             } else {
                 (void)attention_ui_select_next();
             }
-        } else if (event == BUTTON_INPUT_SELECT) {
+        } else if (event == BUTTON_INPUT_PWR_SHORT) {
             if (attention_ui_is_detail_visible() || attention_ui_is_settings_visible()) {
                 attention_ui_show_list();
             }
             else (void)attention_ui_activate_selected();
+        } else if (event == BUTTON_INPUT_BOOT_LONG || event == BUTTON_INPUT_PWR_LONG) {
+            char thread_id[ATTENTION_ID_MAX];
+            if (attention_ui_get_voice_target_id(thread_id, sizeof(thread_id))) {
+                const bool audio_was_listening = voice_audio_is_listening();
+                if (audio_was_listening) {
+                    // Privacy boundary: close the PCM gate before muting this task
+                    // or switching Voice to another selected task.
+                    voice_audio_set_listening(false);
+                }
+                taskENTER_CRITICAL(&s_voice_control_lock);
+                const voice_control_action_t action = voice_control_begin_toggle(
+                    &s_voice_control,
+                    thread_id
+                );
+                taskEXIT_CRITICAL(&s_voice_control_lock);
+                if (action == VOICE_CONTROL_ACTION_MUTE) {
+                    attention_ui_set_voice_state(thread_id, ATTENTION_VOICE_MUTED);
+                }
+                voice_request_t request = {
+                    .kind = action == VOICE_CONTROL_ACTION_MUTE
+                        ? VOICE_REQUEST_MUTE
+                        : VOICE_REQUEST_START,
+                };
+                strlcpy(request.thread_id, thread_id, sizeof(request.thread_id));
+                (void)xQueueSend(s_voice_queue, &request, 0);
+            }
         }
         bsp_display_unlock();
     }
@@ -217,17 +394,29 @@ void app_main(void)
     ESP_ERROR_CHECK(bsp_display_backlight_on());
 
     s_detail_queue = xQueueCreate(1, sizeof(detail_request_t));
-    if (s_detail_queue == NULL) {
-        ESP_LOGE(TAG, "Could not create detail request queue");
+    s_voice_queue = xQueueCreate(4, sizeof(voice_request_t));
+    if (s_detail_queue == NULL || s_voice_queue == NULL) {
+        ESP_LOGE(TAG, "Could not create request queues");
         return;
     }
 
+    voice_control_init(&s_voice_control);
+
     bsp_display_lock(0);
-    attention_ui_init(queue_detail, NULL);
+    attention_ui_init(queue_detail, queue_focus, NULL);
     bsp_display_unlock();
 
     ESP_ERROR_CHECK(button_input_init());
-    esp_err_t audio_result = attention_audio_init();
+    esp_err_t audio_result = voice_audio_init();
+    if (audio_result == ESP_OK) {
+        esp_err_t usb_result = usb_microphone_init();
+        if (usb_result != ESP_OK) {
+            ESP_LOGW(TAG, "USB microphone disabled: %s", esp_err_to_name(usb_result));
+        }
+    } else {
+        ESP_LOGW(TAG, "Voice microphone disabled: %s", esp_err_to_name(audio_result));
+    }
+    audio_result = attention_audio_init();
     if (audio_result != ESP_OK) {
         ESP_LOGW(TAG, "Attention audio disabled: %s", esp_err_to_name(audio_result));
     }
@@ -235,5 +424,6 @@ void app_main(void)
 
     create_task_or_log(poll_task, "attention_poll", 16384, 5);
     create_task_or_log(detail_task, "attention_detail", 16384, 5);
+    create_task_or_log(voice_task, "desktop_voice", 12288, 6);
     create_task_or_log(button_task, "attention_buttons", 4096, 6);
 }

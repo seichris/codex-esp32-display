@@ -24,6 +24,19 @@ GET /api/v1/attention
   "count": 3,
   "totalCount": 5,
   "truncated": true,
+  "currentThread": {
+    "id": "opaque-current-thread-id",
+    "title": "Desktop Voice implementation",
+    "project": "codex-esp32-display",
+    "status": "idle",
+    "focusConfidence": "inferred",
+    "voiceState": "muted"
+  },
+  "capabilities": {
+    "desktopFocus": true,
+    "desktopVoiceHotkey": true,
+    "powerButtonLongPress": true
+  },
   "items": [
     {
       "id": "opaque-thread-id",
@@ -48,7 +61,9 @@ GET /api/v1/attention
 ```
 
 Firmware consumes the ID, title, project, status, age, unread, pinned, and new
-flags, plus top-level count/truncation/diagnostics.
+flags, plus top-level count/truncation/diagnostics, current-thread state, and
+Desktop-control capabilities. The current thread is omitted from `items` so it
+can be rendered once in a fixed card.
 
 Status values: `idle`, `running`, `waiting_input`, `waiting_approval`, `error`.
 Running or error alone does not cause inclusion.
@@ -59,8 +74,8 @@ Running or error alone does not cause inclusion.
 GET /api/v1/threads/<url-encoded-thread-id>/latest
 ```
 
-Only a thread present in the current bounded attention payload may be read. A
-thread outside that list returns HTTP 404.
+Only a thread present in the current bounded attention payload or identified by
+`currentThread` may be read. Any other thread returns HTTP 404.
 
 ```json
 {
@@ -80,6 +95,51 @@ thread outside that list returns HTTP 404.
 
 `kind` is one of `agent`, `plan`, `user`, `preview`, or `empty`. Text is capped
 at 5,600 UTF-8 bytes by the bridge.
+
+## Desktop focus and Voice
+
+All commands require the same bearer token as the list endpoint. Requests must
+use `Content-Type: application/json`, are limited to 4 KiB, reject unknown
+fields, and use an idempotent `requestId`.
+
+```http
+POST /api/v1/desktop/focus
+```
+
+```json
+{
+  "threadId": "opaque-thread-id",
+  "requestId": "device-focus-42"
+}
+```
+
+```http
+POST /api/v1/desktop/voice
+```
+
+```json
+{
+  "threadId": "opaque-thread-id",
+  "requestId": "device-voice-43",
+  "command": "start-or-resume"
+}
+```
+
+`command` is `start-or-resume` or `mute`. Query reconciliation state with:
+
+```http
+GET /api/v1/desktop/state
+```
+
+Successful responses include the exact acknowledged `threadId`,
+`focusConfidence`, `voiceState`, and capabilities. The bridge returns HTTP 503
+with `desktop_control_unavailable` when it is not running as a child of the
+menu-bar companion. Starting Voice requires a prior focus acknowledgement for
+the same thread ID.
+
+`focusConfidence` is `confirmed`, `inferred`, or `unavailable`. The current
+implementation reports `inferred`: opening the exact-ID deep link succeeded,
+but Codex Desktop does not expose a public selected-task acknowledgement.
 
 ## Versioning
 

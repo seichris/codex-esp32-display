@@ -11,6 +11,7 @@
 
 #define RESPONSE_LIMIT (64 * 1024)
 #define DETAIL_URL_MAX 768
+#define COMMAND_BODY_MAX 512
 
 static const char *TAG = "attention_http";
 
@@ -116,6 +117,37 @@ static attention_status_t parse_status(const cJSON *object)
     return ATTENTION_STATUS_IDLE;
 }
 
+static attention_focus_confidence_t parse_focus_confidence(const cJSON *object)
+{
+    const cJSON *value = cJSON_GetObjectItemCaseSensitive(object, "focusConfidence");
+    if (!cJSON_IsString(value) || value->valuestring == NULL) return ATTENTION_FOCUS_UNAVAILABLE;
+    if (strcmp(value->valuestring, "confirmed") == 0) return ATTENTION_FOCUS_CONFIRMED;
+    if (strcmp(value->valuestring, "inferred") == 0) return ATTENTION_FOCUS_INFERRED;
+    return ATTENTION_FOCUS_UNAVAILABLE;
+}
+
+static attention_voice_state_t parse_voice_state(const cJSON *object)
+{
+    const cJSON *value = cJSON_GetObjectItemCaseSensitive(object, "voiceState");
+    if (!cJSON_IsString(value) || value->valuestring == NULL) return ATTENTION_VOICE_UNKNOWN;
+    if (strcmp(value->valuestring, "ready") == 0) return ATTENTION_VOICE_READY;
+    if (strcmp(value->valuestring, "focusing") == 0) return ATTENTION_VOICE_FOCUSING;
+    if (strcmp(value->valuestring, "starting") == 0) return ATTENTION_VOICE_STARTING;
+    if (strcmp(value->valuestring, "listening") == 0) return ATTENTION_VOICE_LISTENING;
+    if (strcmp(value->valuestring, "muted") == 0) return ATTENTION_VOICE_MUTED;
+    if (strcmp(value->valuestring, "error") == 0) return ATTENTION_VOICE_ERROR;
+    return ATTENTION_VOICE_UNKNOWN;
+}
+
+static void parse_capabilities(const cJSON *object, attention_capabilities_t *capabilities)
+{
+    memset(capabilities, 0, sizeof(*capabilities));
+    if (!cJSON_IsObject(object)) return;
+    capabilities->desktop_focus = json_bool(object, "desktopFocus");
+    capabilities->desktop_voice_hotkey = json_bool(object, "desktopVoiceHotkey");
+    capabilities->power_button_long_press = json_bool(object, "powerButtonLongPress");
+}
+
 static esp_err_t perform_get(const char *url, response_buffer_t *response)
 {
     esp_http_client_config_t config = {
@@ -168,6 +200,58 @@ static esp_err_t perform_get(const char *url, response_buffer_t *response)
     return ESP_OK;
 }
 
+static esp_err_t perform_post(const char *url, const char *body, response_buffer_t *response)
+{
+    esp_http_client_config_t config = {
+        .url = url,
+        .event_handler = http_event,
+        .user_data = response,
+        .timeout_ms = 8000,
+        .buffer_size = 2048,
+        .buffer_size_tx = 1024,
+        .keep_alive_enable = true,
+        .user_agent = "codex-esp32-display/0.3.0",
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (client == NULL) return ESP_ERR_NO_MEM;
+    esp_http_client_set_method(client, HTTP_METHOD_POST);
+    esp_http_client_set_header(client, "Accept", "application/json");
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+    esp_http_client_set_post_field(client, body, (int)strlen(body));
+
+    char authorization[320];
+    if (strlen(CONFIG_CODEX_ATTENTION_BRIDGE_TOKEN) > 0) {
+        int written = snprintf(
+            authorization,
+            sizeof(authorization),
+            "Bearer %s",
+            CONFIG_CODEX_ATTENTION_BRIDGE_TOKEN
+        );
+        if (written <= 0 || (size_t)written >= sizeof(authorization)) {
+            esp_http_client_cleanup(client);
+            return ESP_ERR_INVALID_SIZE;
+        }
+        esp_http_client_set_header(client, "Authorization", authorization);
+    }
+
+    esp_err_t result = esp_http_client_perform(client);
+    const int status = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+    if (result != ESP_OK) return result;
+    if (response->overflow) return ESP_ERR_INVALID_SIZE;
+    if (status != 200) {
+        ESP_LOGW(TAG, "Desktop command returned HTTP %d", status);
+        if (status == 401) return ESP_ERR_INVALID_STATE;
+        if (status == 404) return ESP_ERR_NOT_FOUND;
+        if (status == 409) return ESP_ERR_INVALID_STATE;
+        if (status == 503) return ESP_ERR_NOT_SUPPORTED;
+        return ESP_FAIL;
+    }
+    if (response->data == NULL || response->length == 0) return ESP_ERR_INVALID_RESPONSE;
+    return ESP_OK;
+}
+
 static esp_err_t parse_snapshot(const char *json, attention_snapshot_t *snapshot)
 {
     cJSON *root = cJSON_Parse(json);
@@ -188,6 +272,27 @@ static esp_err_t parse_snapshot(const char *json, attention_snapshot_t *snapshot
     if (cJSON_IsObject(diagnostics)) {
         snapshot->desktop_state_available = json_bool(diagnostics, "desktopStateAvailable");
         copy_json_string(snapshot->source_error, sizeof(snapshot->source_error), diagnostics, "sourceError");
+    }
+
+    const cJSON *capabilities = cJSON_GetObjectItemCaseSensitive(root, "capabilities");
+    parse_capabilities(capabilities, &snapshot->capabilities);
+
+    const cJSON *current = cJSON_GetObjectItemCaseSensitive(root, "currentThread");
+    if (cJSON_IsObject(current)) {
+        attention_current_thread_t *output = &snapshot->current_thread;
+        copy_json_string(output->id, sizeof(output->id), current, "id");
+        copy_json_string(output->title, sizeof(output->title), current, "title");
+        copy_json_string(output->project, sizeof(output->project), current, "project");
+        output->available = output->id[0] != '\0';
+        output->status = parse_status(current);
+        output->focus_confidence = parse_focus_confidence(current);
+        output->voice_state = parse_voice_state(current);
+        if (output->available && output->title[0] == '\0') {
+            strlcpy(output->title, "Current Codex thread", sizeof(output->title));
+        }
+        if (output->available && output->project[0] == '\0') {
+            strlcpy(output->project, "Codex", sizeof(output->project));
+        }
     }
 
     const cJSON *item = NULL;
@@ -259,6 +364,19 @@ static bool valid_thread_id(const char *thread_id)
     return true;
 }
 
+static esp_err_t bridge_api_url(const char *path, char *output, size_t output_size)
+{
+    if (path == NULL || output == NULL || output_size == 0) return ESP_ERR_INVALID_ARG;
+    const char *base = CONFIG_CODEX_ATTENTION_BRIDGE_URL;
+    const char *scheme = strstr(base, "://");
+    const char *base_path = scheme == NULL ? strchr(base, '/') : strchr(scheme + 3, '/');
+    const size_t prefix_length = base_path == NULL ? strlen(base) : (size_t)(base_path - base);
+    if (prefix_length > 600) return ESP_ERR_INVALID_SIZE;
+    const int written = snprintf(output, output_size, "%.*s%s", (int)prefix_length, base, path);
+    if (written <= 0 || (size_t)written >= output_size) return ESP_ERR_INVALID_SIZE;
+    return ESP_OK;
+}
+
 static esp_err_t detail_url(const char *thread_id, char *output, size_t output_size)
 {
     if (!valid_thread_id(thread_id) || output == NULL || output_size == 0) return ESP_ERR_INVALID_ARG;
@@ -311,4 +429,94 @@ esp_err_t attention_client_fetch_detail(const char *thread_id, attention_detail_
     if (result == ESP_OK) result = parse_detail(response.data, detail);
     free(response.data);
     return result;
+}
+
+static esp_err_t parse_desktop_state(const char *json, attention_desktop_state_t *state)
+{
+    cJSON *root = cJSON_Parse(json);
+    if (root == NULL) return ESP_ERR_INVALID_RESPONSE;
+    const cJSON *version = cJSON_GetObjectItemCaseSensitive(root, "version");
+    if (!cJSON_IsNumber(version) || version->valueint != 1) {
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    memset(state, 0, sizeof(*state));
+    copy_json_string(state->request_id, sizeof(state->request_id), root, "requestId");
+    copy_json_string(state->thread_id, sizeof(state->thread_id), root, "threadId");
+    state->focus_confidence = parse_focus_confidence(root);
+    state->voice_state = parse_voice_state(root);
+    parse_capabilities(cJSON_GetObjectItemCaseSensitive(root, "capabilities"), &state->capabilities);
+    cJSON_Delete(root);
+    return ESP_OK;
+}
+
+esp_err_t attention_client_fetch_desktop_state(attention_desktop_state_t *state)
+{
+    if (state == NULL) return ESP_ERR_INVALID_ARG;
+    char url[DETAIL_URL_MAX];
+    esp_err_t result = bridge_api_url("/api/v1/desktop/state", url, sizeof(url));
+    if (result != ESP_OK) return result;
+    response_buffer_t response = { 0 };
+    result = perform_get(url, &response);
+    if (result == ESP_OK) result = parse_desktop_state(response.data, state);
+    free(response.data);
+    return result;
+}
+
+static esp_err_t desktop_command(
+    const char *path,
+    const char *thread_id,
+    const char *command,
+    const char *request_id,
+    attention_desktop_state_t *state
+)
+{
+    if (!valid_thread_id(thread_id) || request_id == NULL || request_id[0] == '\0' || state == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    cJSON *body = cJSON_CreateObject();
+    if (body == NULL) return ESP_ERR_NO_MEM;
+    cJSON_AddStringToObject(body, "threadId", thread_id);
+    cJSON_AddStringToObject(body, "requestId", request_id);
+    if (command != NULL) cJSON_AddStringToObject(body, "command", command);
+    char *json = cJSON_PrintUnformatted(body);
+    cJSON_Delete(body);
+    if (json == NULL) return ESP_ERR_NO_MEM;
+    if (strlen(json) >= COMMAND_BODY_MAX) {
+        free(json);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    char url[DETAIL_URL_MAX];
+    esp_err_t result = bridge_api_url(path, url, sizeof(url));
+    response_buffer_t response = { 0 };
+    if (result == ESP_OK) result = perform_post(url, json, &response);
+    if (result == ESP_OK) result = parse_desktop_state(response.data, state);
+    free(json);
+    free(response.data);
+    return result;
+}
+
+esp_err_t attention_client_focus(
+    const char *thread_id,
+    const char *request_id,
+    attention_desktop_state_t *state
+)
+{
+    return desktop_command("/api/v1/desktop/focus", thread_id, NULL, request_id, state);
+}
+
+esp_err_t attention_client_voice(
+    const char *thread_id,
+    const char *command,
+    const char *request_id,
+    attention_desktop_state_t *state
+)
+{
+    if (command == NULL
+        || (strcmp(command, "start-or-resume") != 0 && strcmp(command, "mute") != 0)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return desktop_command("/api/v1/desktop/voice", thread_id, command, request_id, state);
 }

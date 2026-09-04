@@ -6,6 +6,9 @@ idf_component_register(
         "attention_client.c"
         "attention_ui.c"
         "button_input.c"
+        "voice_audio.c"
+        "usb_microphone.c"
+        "voice_control.c"
     INCLUDE_DIRS "."
     REQUIRES
         esp_driver_gpio
@@ -17,6 +20,7 @@ idf_component_register(
         esp_wifi
         json
         nvs_flash
+        usb_device_uac
 )
 
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wall -Wextra -Werror)
