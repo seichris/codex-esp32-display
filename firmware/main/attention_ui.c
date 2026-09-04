@@ -203,6 +203,7 @@ static void create_list_view(lv_obj_t *screen)
     lv_obj_remove_flag(divider, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_size(divider, 390, 1);
     lv_obj_align(divider, LV_ALIGN_TOP_MID, 0, 54);
+    lv_obj_set_style_radius(divider, 0, 0);
     lv_obj_set_style_bg_color(divider, COLOR_BORDER, 0);
     lv_obj_set_style_bg_opa(divider, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(divider, 0, 0);
@@ -316,7 +317,7 @@ void attention_ui_render(const attention_snapshot_t *snapshot)
     char count[20];
     if (snapshot->total_count > 99) snprintf(count, sizeof(count), "99+");
     else snprintf(count, sizeof(count), "%lu", (unsigned long)snapshot->total_count);
-    lv_label_set_text(s_count_label, count);
+    lv_label_set_text_fmt(s_count_label, "(%s)", count);
 
     const bool status_ok = snapshot->source_error[0] == '\0'
         && snapshot->desktop_state_available;
