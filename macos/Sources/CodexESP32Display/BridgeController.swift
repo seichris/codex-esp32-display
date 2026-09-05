@@ -71,6 +71,7 @@ final class BridgeController: ObservableObject {
     private var process: Process?
     private var logHandle: FileHandle?
     private var healthTimer: Timer?
+    private lazy var voiceSettingsWindow = VoiceSettingsWindowController()
 
     init() {
         _ = FileManager.default.changeCurrentDirectoryPath("/tmp")
@@ -195,8 +196,7 @@ final class BridgeController: ObservableObject {
     }
 
     func openVoiceSettings() {
-        NSApplication.shared.activate(ignoringOtherApps: true)
-        NSApplication.shared.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        voiceSettingsWindow.show()
     }
 
     private func processDidTerminate(status: Int32) {
