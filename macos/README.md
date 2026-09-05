@@ -79,7 +79,9 @@ unauthenticated local socket.
 
 The build embeds the bridge source and current `bridge/config.json` in the app
 bundle so a Finder launch does not depend on access to the protected workspace.
-Rebuild after changing the bridge config.
+Opening the dashboard from the menu automatically seeds its token through a
+URL fragment, then removes the fragment from the address bar after saving it in
+the dashboard's local storage. Rebuild after changing the bridge config.
 
 The previous `com.seichris.codex-esp32-display` LaunchAgent should remain
 unloaded while this app owns port `5180`.

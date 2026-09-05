@@ -68,6 +68,7 @@ final class BridgeController: ObservableObject {
     let desktopVoiceController = DesktopVoiceController()
 
     private let bridgeRoot: URL
+    private var bridgeToken: String?
     private var process: Process?
     private var logHandle: FileHandle?
     private var healthTimer: Timer?
@@ -98,6 +99,8 @@ final class BridgeController: ObservableObject {
 
     func start() {
         guard process == nil else { return }
+
+        bridgeToken = Self.resolveBridgeToken(from: bridgeRoot)
 
         let bridgeEntry = bridgeRoot.appendingPathComponent("bridge/src/index.mjs")
         guard FileManager.default.fileExists(atPath: bridgeEntry.path) else {
@@ -182,7 +185,15 @@ final class BridgeController: ObservableObject {
     }
 
     func openDashboard() {
-        NSWorkspace.shared.open(dashboardURL)
+        var url = dashboardURL
+        if let bridgeToken, !bridgeToken.isEmpty,
+           var components = URLComponents(url: dashboardURL, resolvingAgainstBaseURL: false) {
+            var fragment = URLComponents()
+            fragment.queryItems = [URLQueryItem(name: "token", value: bridgeToken)]
+            components.percentEncodedFragment = fragment.percentEncodedQuery
+            url = components.url ?? dashboardURL
+        }
+        NSWorkspace.shared.open(url)
     }
 
     func copyEndpoint() {
@@ -283,6 +294,21 @@ final class BridgeController: ObservableObject {
         }
 
         return URL(fileURLWithPath: fileManager.currentDirectoryPath).standardizedFileURL
+    }
+
+    private static func resolveBridgeToken(from bridgeRoot: URL) -> String? {
+        if let environmentToken = ProcessInfo.processInfo.environment["CODEX_ATTENTION_TOKEN"] {
+            return environmentToken.isEmpty ? nil : environmentToken
+        }
+
+        let configURL = bridgeRoot.appendingPathComponent("bridge/config.json")
+        guard let data = try? Data(contentsOf: configURL),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let token = object["token"] as? String,
+              !token.isEmpty else {
+            return nil
+        }
+        return token
     }
 
     private static func resolveNode() -> URL? {

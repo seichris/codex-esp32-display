@@ -205,8 +205,10 @@ open "macos/build/Codex ESP32 Display.app"
 
 It replaces the bridge LaunchAgent while running and provides bridge status,
 start/stop, the dashboard, endpoint copying, Voice status/settings, and log
-access from its menu. Microphone and Speech Recognition permissions are required for native
-dictation. Audio is transcribed locally and is never saved.
+access from its menu. Opening the dashboard from the menu automatically seeds
+its token and clears the URL fragment after the dashboard stores it locally.
+Microphone and Speech Recognition permissions are required for native dictation.
+Audio is transcribed locally and is never saved.
 
 ## Attention rules
 
