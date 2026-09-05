@@ -38,7 +38,10 @@ system default microphone.
 The exact target is pinned for a recording. Switching targets while recording,
 overwriting a pending draft, and late callbacks from previous recordings are
 rejected. Recording ends after 55 seconds; finalization has a 10-second timeout
-and retains partial text on failure. The existing firmware uses `VOICE MUTED`
+and retains partial text on failure. Empty speech results, including an empty final
+result after stopping, preserve the latest non-empty transcript for review. Late
+callbacks cannot overwrite the editable draft, and starting another recording
+requires discarding any existing text first. The existing firmware uses `VOICE MUTED`
 while the companion finishes transcription and `VOICE READY` when a draft exists.
 The updated firmware closes its gate when a fresh companion snapshot reports
 that recording ended or became unavailable, and enforces a 60-second local

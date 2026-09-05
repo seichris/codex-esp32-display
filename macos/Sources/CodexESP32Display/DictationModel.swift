@@ -47,6 +47,7 @@ final class DictationModel: ObservableObject {
 
     func start(threadId: String) async throws {
         guard UUID(uuidString: threadId) != nil else { throw DictationError.message("Dictation requires a local Codex task ID.") }
+        guard draftText.isEmpty else { throw DictationError.message("Finish or discard the existing dictation first.") }
         guard ready else { throw DictationError.message("Open Voice Settings and enable Microphone and Speech Recognition, then connect the board by USB.") }
         let id = try session.begin(threadId: threadId)
         handoffMessage = nil
@@ -82,7 +83,12 @@ final class DictationModel: ObservableObject {
         case .recording: session.recording(id)
         case .finishing: session.finishing(id)
         case let .transcript(text, final):
-            session.update(id, text: text, final: final)
+            // Once review begins, late recognition callbacks must not replace
+            // the editable draft with the recognizer's older copy.
+            guard session.update(id, text: text, final: final) else { return }
+            if final, text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !session.text.isEmpty {
+                DictationDiagnostics.record("empty-final-kept-partial")
+            }
             draftText = session.text
             if final { level = 0; showWindow() }
         case let .failed(message): session.fail(id, message); level = 0; showWindow()

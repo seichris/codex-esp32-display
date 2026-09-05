@@ -46,7 +46,8 @@ this private broker, so source IDs are tracked rather than treated as window IDs
 - 26 bridge tests passed. Signed release companion and ESP-IDF 5.4.4 firmware
   builds passed. Existing firmware protocol is unchanged.
 - Firmware was flashed to the connected ESP32-S3 and esptool verified the written
-  data. Display behavior after the required power cycle is a separate user check.
+  data. After power cycling, the user confirmed the device displays the correct active
+  task and that a long press starts recording into Device Dictation.
 
 `trusted` in new event diagnostic rows means the local broker peer was verified;
 in historical Accessibility rows it meant AX permission was granted.

@@ -31,14 +31,20 @@ struct DictationSession {
         phase = .transcribing
     }
 
-    mutating func update(_ id: UUID, text: String, final: Bool) {
-        guard self.id == id, isBusy else { return }
-        self.text = text
+    @discardableResult
+    mutating func update(_ id: UUID, text: String, final: Bool) -> Bool {
+        guard self.id == id, isBusy else { return false }
+        // Speech can emit an empty result when endAudio closes the request.
+        // Keep the latest useful hypothesis rather than erasing captured words.
+        if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            self.text = text
+        }
         if final {
-            if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if self.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 fail(id, "No speech was recognized. Check the microphone level and try again.")
             } else { phase = .draft }
         }
+        return true
     }
 
     mutating func fail(_ id: UUID, _ message: String) {

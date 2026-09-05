@@ -55,6 +55,46 @@ final class DictationSessionTests: XCTestCase {
         XCTAssertThrowsError(try state.begin(threadId: second))
     }
 
+    func testEmptyFinalAfterStopKeepsCapturedTextAsReviewableDraft() throws {
+        var state = DictationSession()
+        let id = try state.begin(threadId: first)
+        state.recording(id)
+        state.update(id, text: "Keep the text when I stop.", final: false)
+        state.finishing(id)
+        XCTAssertTrue(state.update(id, text: " \n", final: true))
+        XCTAssertEqual(state.phase, .draft)
+        XCTAssertEqual(state.text, "Keep the text when I stop.")
+        XCTAssertEqual(state.threadId, first)
+        XCTAssertNil(state.error)
+        XCTAssertThrowsError(try state.begin(threadId: first))
+    }
+
+    func testBlankPartialCannotEraseWordsAndNonemptyFinalCanReviseThem() throws {
+        var state = DictationSession()
+        let id = try state.begin(threadId: first)
+        state.recording(id)
+        state.update(id, text: "Keep these word", final: false)
+        state.update(id, text: "", final: false)
+        XCTAssertEqual(state.text, "Keep these word")
+        state.finishing(id)
+        state.update(id, text: "Keep these words.", final: true)
+        XCTAssertEqual(state.text, "Keep these words.")
+        XCTAssertEqual(state.phase, .draft)
+    }
+
+    func testTerminalCallbacksCannotReplaceTheReviewDraft() throws {
+        for finishWithError in [false, true] {
+            var state = DictationSession()
+            let id = try state.begin(threadId: first)
+            state.update(id, text: "Saved words", final: false)
+            if finishWithError { state.fail(id, "Disconnected") }
+            else { state.update(id, text: "Saved words", final: true) }
+            XCTAssertFalse(state.update(id, text: "", final: true))
+            XCTAssertFalse(state.update(id, text: "Late revision", final: false))
+            XCTAssertEqual(state.text, "Saved words")
+        }
+    }
+
     func testStopWhileStartingCannotBeReopenedByLateReady() throws {
         var state = DictationSession()
         let id = try state.begin(threadId: first)
