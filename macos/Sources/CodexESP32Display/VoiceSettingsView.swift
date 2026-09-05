@@ -6,6 +6,7 @@ struct VoiceSettingsView: View {
     @ObservedObject var dictation: DictationModel
     @AppStorage("VoiceDeepLinkTemplate") private var deepLink = "codex://threads/{threadId}"
     @State private var requesting = false
+    @State private var microphoneConnected = DictationRecorder.device != nil
 
     var body: some View {
         Form {
@@ -16,7 +17,8 @@ struct VoiceSettingsView: View {
                 TextField("Task deep link", text: $deepLink)
             }
             Section("Readiness") {
-                readiness("Waveshare microphone connected", ok: DictationRecorder.device != nil)
+                readiness(microphoneConnected ? "Waveshare microphone connected" : "Waveshare microphone not detected. Connect the USB data cable.",
+                          ok: microphoneConnected)
                 readiness("Microphone permission", ok: AVCaptureDevice.authorizationStatus(for: .audio) == .authorized)
                 readiness("Speech Recognition permission", ok: SFSpeechRecognizer.authorizationStatus() == .authorized)
                 readiness("On-device English recognition", ok: DictationRecorder.onDeviceAvailable)
@@ -28,6 +30,13 @@ struct VoiceSettingsView: View {
             }
         }
         .formStyle(.grouped).padding().frame(width: 550, height: 560)
+        .onAppear { microphoneConnected = DictationRecorder.device != nil }
+        .onReceive(NotificationCenter.default.publisher(for: AVCaptureDevice.wasConnectedNotification)) { _ in
+            microphoneConnected = DictationRecorder.device != nil
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AVCaptureDevice.wasDisconnectedNotification)) { _ in
+            microphoneConnected = DictationRecorder.device != nil
+        }
     }
     private func readiness(_ title: String, ok: Bool) -> some View {
         Label(title, systemImage: ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
