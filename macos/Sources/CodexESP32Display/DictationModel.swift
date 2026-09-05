@@ -55,7 +55,7 @@ final class DictationModel: ObservableObject {
         onStateChange?()
         do {
             try await recorder.start(id: id) { [weak self] event in
-                Task { @MainActor in self?.handle(id: id, event: event) }
+                Task { @MainActor [weak self] in self?.handle(id: id, event: event) }
             }
             session.recording(id)
             onStateChange?()
