@@ -16,11 +16,13 @@ const THREAD_ID = '019a4444-4444-7444-8444-444444444444';
 test('normalizes Desktop state and fails closed for malformed values', () => {
   assert.deepEqual(normalizeDesktopState(null), unavailableDesktopState());
   assert.deepEqual(normalizeDesktopState({
+    available: true,
     threadId: THREAD_ID,
     focusConfidence: 'confirmed',
     voiceState: 'listening',
     capabilities: { desktopFocus: true, desktopVoiceHotkey: true },
   }), {
+    available: true,
     threadId: THREAD_ID,
     focusConfidence: 'confirmed',
     voiceState: 'listening',
@@ -94,4 +96,18 @@ test('exchanges a private IPC command and reuses an idempotent response', async 
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test('a responding controller with no target does not establish Mac selection', () => {
+  const state = normalizeDesktopState({
+    available: true,
+    threadId: null,
+    focusConfidence: 'confirmed',
+    capabilities: { desktopFocus: true },
+  });
+  assert.equal(state.available, true);
+  assert.equal(state.threadId, null);
+  assert.equal(state.focusConfidence, 'unavailable');
+  assert.equal(state.voiceState, 'unknown');
+  assert.equal(unavailableDesktopState().available, false);
 });

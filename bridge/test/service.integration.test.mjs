@@ -43,6 +43,14 @@ rl.on('line', line => {
 `);
   await chmod(fakeCodex, 0o755);
 
+  let controllerState = {
+    available: true,
+    threadId: PINNED,
+    focusConfidence: 'inferred',
+    voiceState: 'muted',
+    capabilities: { desktopFocus: true, desktopVoiceHotkey: true },
+  };
+  let controllerFailed = false;
   const service = new CodexAttentionService({
     codexBin: fakeCodex,
     codexHome,
@@ -54,12 +62,8 @@ rl.on('line', line => {
     logger: { error() {}, log() {} },
     desktopController: {
       async state() {
-        return {
-          threadId: PINNED,
-          focusConfidence: 'inferred',
-          voiceState: 'muted',
-          capabilities: { desktopFocus: true, desktopVoiceHotkey: true },
-        };
+        if (controllerFailed) throw new Error('controller disconnected');
+        return controllerState;
       },
     },
   });
@@ -69,6 +73,7 @@ rl.on('line', line => {
     assert.equal(service.connected, true);
     assert.deepEqual(service.snapshot.items.map((item) => item.id), [WAITING, UNREAD]);
     assert.equal(service.snapshot.items[1].unread, true);
+    assert.equal(service.snapshot.desktopControlAvailable, true);
     assert.equal(service.snapshot.currentThread.id, PINNED);
     assert.equal(service.snapshot.currentThread.focusConfidence, 'inferred');
     assert.equal(service.snapshot.capabilities.desktopVoiceHotkey, true);
@@ -81,6 +86,31 @@ rl.on('line', line => {
 
     const sanitized = await service.latestThread(PINNED);
     assert.equal(sanitized.text, 'Latest result');
+
+    // The companion can be healthy while the Mac selection is unobserved.
+    // Unread/pinned/recent tasks are not evidence of the selected Mac task.
+    controllerState = { ...controllerState, threadId: null, focusConfidence: 'unavailable', voiceState: 'unknown' };
+    await service.refresh();
+    assert.equal(service.snapshot.currentThread, null);
+    assert.equal(service.snapshot.desktopControlAvailable, true);
+    assert.equal(service.snapshot.diagnostics.desktopStateAvailable, true);
+    assert.equal((await service.desktopState()).focusConfidence, 'unavailable');
+    assert.equal(service.snapshot.items.some((item) => item.id === PINNED), true);
+
+    controllerFailed = true;
+    await service.refresh();
+    assert.equal(service.snapshot.currentThread, null);
+    assert.equal(service.snapshot.desktopControlAvailable, false);
+    assert.equal(service.snapshot.diagnostics.desktopStateAvailable, true);
+    assert.equal((await service.desktopState()).desktopControlAvailable, false);
+
+    controllerFailed = false;
+    controllerState = { ...controllerState, threadId: PINNED, focusConfidence: 'inferred' };
+    await service.refresh();
+    assert.equal(service.snapshot.desktopControlAvailable, true);
+    assert.equal(service.snapshot.currentThread.id, PINNED);
+    assert.equal(service.snapshot.currentThread.focusConfidence, 'inferred');
+    assert.equal(service.snapshot.items.some((item) => item.id === PINNED), false);
   } finally {
     await service.stop();
     await rm(root, { recursive: true, force: true });

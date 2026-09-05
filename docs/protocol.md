@@ -24,6 +24,7 @@ GET /api/v1/attention
   "count": 3,
   "totalCount": 5,
   "truncated": true,
+  "desktopControlAvailable": true,
   "currentThread": {
     "id": "opaque-current-thread-id",
     "title": "Desktop Voice implementation",
@@ -132,7 +133,7 @@ GET /api/v1/desktop/state
 ```
 
 Successful responses include the exact acknowledged `threadId`,
-`focusConfidence`, `voiceState`, and capabilities. The bridge returns HTTP 503
+`focusConfidence`, `voiceState`, `desktopControlAvailable`, and capabilities. The bridge returns HTTP 503
 with `desktop_control_unavailable` when it is not running as a child of the
 menu-bar companion. Starting Voice requires a prior focus acknowledgement for
 the same thread ID.
@@ -140,6 +141,18 @@ the same thread ID.
 `focusConfidence` is `confirmed`, `inferred`, or `unavailable`. The current
 implementation reports `inferred`: opening the exact-ID deep link succeeded,
 but Codex Desktop does not expose a public selected-task acknowledgement.
+
+`desktopControlAvailable` reports a successful private companion IPC response,
+independently of `diagnostics.desktopStateAvailable` (the unread/pinned file).
+It is false when the controller is absent or fails to respond. A missing field
+in an older bridge response means unknown availability.
+
+A null `currentThread` means the bridge has no observed or device-requested task
+ID. It does **not** mean that no task is open on the Mac. With a healthy
+controller, the firmware shows `MAC TASK UNKNOWN` and offers the existing
+list-selection/long-press flow. After an exact-ID focus request it shows
+`VOICE TARGET` for inferred focus; only confirmed evidence allows `CURRENT ON
+MAC`. Recent, pinned and unread IDs are never used to guess Desktop selection.
 
 ## Versioning
 

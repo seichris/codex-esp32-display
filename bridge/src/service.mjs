@@ -361,6 +361,7 @@ export class CodexAttentionService extends EventEmitter {
     this.#snapshot = {
       ...this.#snapshot,
       currentThread,
+      desktopControlAvailable: state.available,
       capabilities: { ...state.capabilities },
     };
   }
@@ -371,6 +372,7 @@ export class CodexAttentionService extends EventEmitter {
       version: 1,
       ...(requestId ? { requestId } : {}),
       threadId: state.threadId,
+      desktopControlAvailable: state.available,
       focusConfidence: state.focusConfidence,
       voiceState: state.voiceState,
       capabilities: { ...state.capabilities },

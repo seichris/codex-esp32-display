@@ -62,11 +62,18 @@ typedef struct {
     bool power_button_long_press;
 } attention_capabilities_t;
 
+typedef enum {
+    ATTENTION_DESKTOP_CONTROL_UNKNOWN = 0,
+    ATTENTION_DESKTOP_CONTROL_UNAVAILABLE,
+    ATTENTION_DESKTOP_CONTROL_AVAILABLE,
+} attention_desktop_control_availability_t;
+
 typedef struct {
     uint32_t count;
     uint32_t total_count;
     bool truncated;
     bool desktop_state_available;
+    attention_desktop_control_availability_t desktop_control_availability;
     attention_current_thread_t current_thread;
     attention_capabilities_t capabilities;
     char source_error[ATTENTION_ERROR_MAX];

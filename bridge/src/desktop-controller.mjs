@@ -38,6 +38,7 @@ export function validRequestId(value) {
 
 export function unavailableDesktopState() {
   return {
+    available: false,
     threadId: null,
     focusConfidence: 'unavailable',
     voiceState: 'unknown',
@@ -61,6 +62,7 @@ export function normalizeDesktopState(value) {
     ? value.capabilities
     : {};
   return {
+    available: value.available === true,
     threadId,
     focusConfidence: threadId ? focusConfidence : 'unavailable',
     voiceState,
@@ -102,7 +104,7 @@ export class DesktopControllerClient {
 
   async state() {
     if (!this.available) return unavailableDesktopState();
-    return normalizeDesktopState(await this.#enqueue('state', {}));
+    return normalizeDesktopState({ ...await this.#enqueue('state', {}), available: true });
   }
 
   async focus(threadId, requestId) {
@@ -110,7 +112,7 @@ export class DesktopControllerClient {
       throw new DesktopControlError('invalid_request', 'Invalid threadId or requestId.', 400);
     }
     return this.#idempotent(requestId, `focus:${threadId}`, async () => (
-      normalizeDesktopState(await this.#enqueue('focus', { threadId }))
+      normalizeDesktopState({ ...await this.#enqueue('focus', { threadId }), available: true })
     ));
   }
 
@@ -119,7 +121,7 @@ export class DesktopControllerClient {
       throw new DesktopControlError('invalid_request', 'Invalid threadId, command, or requestId.', 400);
     }
     return this.#idempotent(requestId, `voice:${threadId}:${command}`, async () => (
-      normalizeDesktopState(await this.#enqueue('voice', { threadId, command }))
+      normalizeDesktopState({ ...await this.#enqueue('voice', { threadId, command }), available: true })
     ));
   }
 

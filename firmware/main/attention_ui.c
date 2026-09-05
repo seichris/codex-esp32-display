@@ -61,7 +61,7 @@ static const lv_color_t COLOR_RED = LV_COLOR_MAKE(255, 139, 151);
 #define DETAIL_BOTTOM_MARGIN 10
 #define CURRENT_CARD_HEIGHT 112
 #define CURRENT_CARD_BOTTOM 8
-#define LIST_WITH_CURRENT_HEIGHT 306
+#define LIST_VIEW_GAP 6
 #define SETTINGS_NVS_NAMESPACE "attention_ui"
 #define SETTINGS_NVS_TITLE_KEY "title_font"
 #define SETTINGS_NVS_SUBTITLE_KEY "subtitle_font"
@@ -400,7 +400,7 @@ static void create_current_card(void)
     lv_obj_remove_flag(s_current_card, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(s_current_card, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_size(s_current_card, 390, CURRENT_CARD_HEIGHT);
-    lv_obj_align(s_current_card, LV_ALIGN_BOTTOM_MID, 0, -CURRENT_CARD_BOTTOM);
+    lv_obj_set_flex_grow(s_current_card, 0);
     lv_obj_set_style_radius(s_current_card, 10, 0);
     lv_obj_set_style_bg_color(s_current_card, lv_color_make(18, 23, 31), 0);
     lv_obj_set_style_bg_opa(s_current_card, LV_OPA_COVER, 0);
@@ -410,7 +410,7 @@ static void create_current_card(void)
     lv_obj_add_event_cb(s_current_card, current_card_clicked, LV_EVENT_CLICKED, NULL);
 
     s_current_caption = lv_label_create(s_current_card);
-    lv_label_set_text(s_current_caption, "NO CURRENT THREAD");
+    lv_label_set_text(s_current_caption, "MAC TASK UNKNOWN");
     set_common_text(s_current_caption, &lv_font_montserrat_14, COLOR_MUTED);
     lv_obj_align(s_current_caption, LV_ALIGN_TOP_LEFT, 0, 0);
 
@@ -422,14 +422,14 @@ static void create_current_card(void)
     s_current_title = lv_label_create(s_current_card);
     lv_obj_set_width(s_current_title, 364);
     lv_label_set_long_mode(s_current_title, LV_LABEL_LONG_DOT);
-    lv_label_set_text(s_current_title, "Open a Codex task on the Mac");
+    lv_label_set_text(s_current_title, "Connecting to the Mac");
     set_common_text(s_current_title, &lv_font_montserrat_20, COLOR_TEXT);
     lv_obj_align(s_current_title, LV_ALIGN_TOP_LEFT, 0, 27);
 
     s_current_meta = lv_label_create(s_current_card);
     lv_obj_set_width(s_current_meta, 364);
     lv_label_set_long_mode(s_current_meta, LV_LABEL_LONG_DOT);
-    lv_label_set_text(s_current_meta, "Desktop focus unavailable");
+    lv_label_set_text(s_current_meta, "Waiting for bridge status");
     set_common_text(s_current_meta, &lv_font_montserrat_14, COLOR_MUTED);
     lv_obj_align(s_current_meta, LV_ALIGN_BOTTOM_LEFT, 0, 0);
 }
@@ -439,10 +439,25 @@ static void update_current_card(void)
     if (s_current_card == NULL) return;
     const attention_current_thread_t *current = &s_snapshot.current_thread;
     if (!current->available) {
-        lv_label_set_text(s_current_caption, "NO CURRENT THREAD");
-        lv_label_set_text(s_current_title, "Open a Codex task on the Mac");
-        lv_label_set_text(s_current_meta, "Desktop focus unavailable");
+        lv_label_set_text(s_current_caption, "MAC TASK UNKNOWN");
+        if (s_snapshot.source_error[0] != '\0') {
+            lv_label_set_text(s_current_title, "Bridge data unavailable");
+            lv_label_set_text(s_current_meta, "Check the bridge and Wi-Fi");
+        } else if (s_snapshot.desktop_control_availability == ATTENTION_DESKTOP_CONTROL_UNKNOWN) {
+            lv_label_set_text(s_current_title, "Controller status unknown");
+            lv_label_set_text(s_current_meta, "Check the Mac bridge and companion");
+        } else if (s_snapshot.desktop_control_availability == ATTENTION_DESKTOP_CONTROL_UNAVAILABLE) {
+            lv_label_set_text(s_current_title, "Voice controller unavailable");
+            lv_label_set_text(s_current_meta, "Start the Mac companion");
+        } else {
+            // No target ID is not evidence that no task is open on the Mac.
+            lv_label_set_text(s_current_title, "Mac selection is unknown");
+            lv_label_set_text(s_current_meta, s_snapshot.capabilities.desktop_focus
+                ? "For Voice, hold a button on a list task"
+                : "Desktop focus needs setup on the Mac");
+        }
         lv_label_set_text(s_current_voice, "VOICE UNKNOWN");
+        lv_obj_set_style_text_color(s_current_voice, COLOR_MUTED, 0);
         lv_obj_add_state(s_current_card, LV_STATE_DISABLED);
         s_current_armed = false;
         if (s_selected_is_current) s_selected_is_current = false;
@@ -518,11 +533,17 @@ static void create_list_view(lv_obj_t *screen)
 {
     s_list_view = lv_obj_create(screen);
     make_root(s_list_view);
+    // Budget the viewport between fixed siblings. Only the list grows and
+    // scrolls; its content height must never size the outer screen.
+    lv_obj_set_flex_flow(s_list_view, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(s_list_view, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_row(s_list_view, LIST_VIEW_GAP, 0);
+    lv_obj_set_style_pad_bottom(s_list_view, CURRENT_CARD_BOTTOM, 0);
 
     lv_obj_t *header = lv_obj_create(s_list_view);
     lv_obj_remove_flag(header, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_size(header, lv_pct(100), 54);
-    lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_flex_grow(header, 0);
     lv_obj_set_style_bg_opa(header, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(header, 0, 0);
     lv_obj_set_style_pad_all(header, 0, 0);
@@ -574,7 +595,7 @@ static void create_list_view(lv_obj_t *screen)
     lv_obj_t *divider = lv_obj_create(s_list_view);
     lv_obj_remove_flag(divider, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_size(divider, 390, 1);
-    lv_obj_align(divider, LV_ALIGN_TOP_MID, 0, 54);
+    lv_obj_set_flex_grow(divider, 0);
     lv_obj_set_style_radius(divider, 0, 0);
     lv_obj_set_style_bg_color(divider, COLOR_BORDER, 0);
     lv_obj_set_style_bg_opa(divider, LV_OPA_COVER, 0);
@@ -582,8 +603,9 @@ static void create_list_view(lv_obj_t *screen)
     lv_obj_set_style_pad_all(divider, 0, 0);
 
     s_list = lv_obj_create(s_list_view);
-    lv_obj_set_size(s_list, 390, LIST_WITH_CURRENT_HEIGHT);
-    lv_obj_align(s_list, LV_ALIGN_TOP_MID, 0, 61);
+    lv_obj_set_size(s_list, 390, 0);
+    lv_obj_set_style_min_height(s_list, 0, 0);
+    lv_obj_set_flex_grow(s_list, 1);
     lv_obj_set_style_bg_opa(s_list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_list, 0, 0);
     lv_obj_set_style_pad_all(s_list, 0, 0);
@@ -932,6 +954,7 @@ void attention_ui_render(const attention_snapshot_t *snapshot)
         && snapshot->desktop_state_available;
     lv_obj_set_style_bg_color(s_status_dot, status_ok ? COLOR_GREEN : COLOR_RED, 0);
 
+    const int32_t prior_scroll_y = lv_obj_get_scroll_y(s_list);
     memset(s_cards, 0, sizeof(s_cards));
     memset(s_card_titles, 0, sizeof(s_card_titles));
     lv_obj_clean(s_list);
@@ -958,6 +981,10 @@ void attention_ui_render(const attention_snapshot_t *snapshot)
         apply_selection(false);
     }
 
+    // lv_obj_clean resets scroll. Restore it only after flex has measured the
+    // new cards; bounded scrolling clamps it if the inbox became shorter.
+    lv_obj_update_layout(s_list);
+    lv_obj_scroll_to_y(s_list, prior_scroll_y, LV_ANIM_OFF);
     update_current_card();
     apply_selection(false);
     update_detail_voice();

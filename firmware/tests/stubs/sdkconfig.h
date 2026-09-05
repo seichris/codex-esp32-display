@@ -1,0 +1,2 @@
+#pragma once
+#define CONFIG_CODEX_ATTENTION_MAX_ITEMS 20

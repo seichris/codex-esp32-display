@@ -24,6 +24,18 @@ jobs:
       - working-directory: bridge
         run: npm run check
 
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch the firmware LVGL baseline
+        run: git clone --depth 1 --branch v9.5.0 https://github.com/lvgl/lvgl.git "$RUNNER_TEMP/lvgl"
+      - name: Test firmware UI with real LVGL
+        run: |
+          cmake -S firmware/tests -B firmware/build/host-tests -DLVGL_SOURCE_DIR="$RUNNER_TEMP/lvgl"
+          cmake --build firmware/build/host-tests --parallel 2
+          ctest --test-dir firmware/build/host-tests --output-on-failure
+
   firmware:
     runs-on: ubuntu-latest
     steps:

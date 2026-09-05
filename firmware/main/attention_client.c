@@ -277,6 +277,13 @@ static esp_err_t parse_snapshot(const char *json, attention_snapshot_t *snapshot
     const cJSON *capabilities = cJSON_GetObjectItemCaseSensitive(root, "capabilities");
     parse_capabilities(capabilities, &snapshot->capabilities);
 
+    const cJSON *control_available = cJSON_GetObjectItemCaseSensitive(root, "desktopControlAvailable");
+    if (cJSON_IsBool(control_available)) {
+        snapshot->desktop_control_availability = cJSON_IsTrue(control_available)
+            ? ATTENTION_DESKTOP_CONTROL_AVAILABLE
+            : ATTENTION_DESKTOP_CONTROL_UNAVAILABLE;
+    }
+
     const cJSON *current = cJSON_GetObjectItemCaseSensitive(root, "currentThread");
     if (cJSON_IsObject(current)) {
         attention_current_thread_t *output = &snapshot->current_thread;
