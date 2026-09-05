@@ -12,6 +12,7 @@ idf_component_register(
         "usb_microphone.c"
         "voice_control.c"
     INCLUDE_DIRS "."
+    PRIV_REQUIRES esp_timer
     REQUIRES
         esp_driver_gpio
         esp_driver_i2c
