@@ -2,6 +2,7 @@
 #undef NDEBUG
 #endif
 #include <assert.h>
+#include <stdlib.h>
 // Exercise the production UI with real LVGL, exposing internal objects only in
 // this test translation unit. NVS alone is stubbed; no display hardware is used.
 #include "../main/attention_ui.c"
@@ -45,7 +46,7 @@ static void assert_viewport(void)
     assert(lv_obj_get_height(s_list) >= 250);
     assert(list.y1 >= 55);
     assert(list.y2 < fixed.y1);
-    assert(lv_obj_get_height(s_current_card) == 112);
+    assert(lv_obj_get_height(s_current_card) == 80);
     assert(fixed.y2 == lv_display_get_vertical_resolution(NULL) - 9);
     assert(lv_obj_get_scroll_y(s_list_view) == 0);
     assert(lv_obj_get_parent(s_current_card) == s_list_view);
@@ -75,7 +76,7 @@ int main(void)
     }
     attention_ui_render(&snapshot);
     assert_viewport();
-    assert(lv_obj_get_height(s_list) == 309);
+    assert(lv_obj_get_height(s_list) == 341);
     settle_scroll();
     lv_refr_now(display);
     memcpy(list_image, displayed, sizeof(list_image));
@@ -142,7 +143,7 @@ int main(void)
     // The remaining-space budget also holds if the root viewport changes.
     lv_obj_set_height(s_list_view, 450);
     lv_obj_update_layout(s_list_view);
-    assert(lv_obj_get_height(s_list) == 257);
+    assert(lv_obj_get_height(s_list) == 289);
     lv_obj_set_height(s_list_view, lv_pct(100));
     snapshot.count = 0;
     attention_ui_render(&snapshot);
@@ -156,7 +157,6 @@ int main(void)
     snapshot.desktop_control_availability = ATTENTION_DESKTOP_CONTROL_AVAILABLE;
     snapshot.capabilities.desktop_focus = true;
     attention_ui_render(&snapshot);
-    assert(strcmp(lv_label_get_text(s_current_caption), "MAC TASK UNKNOWN") == 0);
     assert(strcmp(lv_label_get_text(s_current_title), "Mac selection is unknown") == 0);
     assert(strstr(lv_label_get_text(s_current_meta), "hold a button") != NULL);
     assert(lv_obj_has_state(s_current_card, LV_STATE_DISABLED));
@@ -172,14 +172,65 @@ int main(void)
     strlcpy(snapshot.current_thread.title, "Known device target", sizeof(snapshot.current_thread.title));
     snapshot.current_thread.focus_confidence = ATTENTION_FOCUS_INFERRED;
     attention_ui_render(&snapshot);
-    assert(strcmp(lv_label_get_text(s_current_caption), "VOICE TARGET") == 0);
     assert(strcmp(lv_label_get_text(s_current_title), "Known device target") == 0);
     assert(!lv_obj_has_state(s_current_card, LV_STATE_DISABLED));
     snapshot.current_thread.focus_confidence = ATTENTION_FOCUS_CONFIRMED;
     attention_ui_render(&snapshot);
-    assert(strcmp(lv_label_get_text(s_current_caption), "CURRENT ON MAC") == 0);
     assert_viewport();
-    printf("LVGL %d.%d.%d: list 309px; fixed card 112px; full-frame detail/settings return, scrolling, refresh, fonts, resize and status passed\n",
+    strlcpy(snapshot.current_thread.project, "codex-esp32-display", sizeof(snapshot.current_thread.project));
+    const attention_voice_state_t states[] = {ATTENTION_VOICE_UNKNOWN, ATTENTION_VOICE_READY,
+        ATTENTION_VOICE_FOCUSING, ATTENTION_VOICE_STARTING, ATTENTION_VOICE_LISTENING,
+        ATTENTION_VOICE_MUTED, ATTENTION_VOICE_ERROR};
+    const lv_color_t colors[] = {COLOR_MUTED, COLOR_MUTED, COLOR_AMBER, COLOR_AMBER,
+        COLOR_GREEN, COLOR_MUTED, COLOR_RED};
+    for (unsigned i = 0; i < sizeof(states) / sizeof(states[0]); ++i) {
+        snapshot.current_thread.voice_state = states[i];
+        attention_ui_render(&snapshot);
+        lv_obj_update_layout(lv_screen_active());
+        assert(lv_color_eq(lv_obj_get_style_text_color(s_current_voice, 0), colors[i]));
+        assert(strcmp(lv_label_get_text(s_current_meta), "codex-esp32-display") == 0);
+        assert(area(s_current_voice).x1 > area(s_current_title).x2);
+        assert(area(s_current_voice).x2 < area(s_current_card).x2);
+        assert(area(s_current_voice).y2 < area(s_current_meta).y1);
+    }
+    memset(snapshot.current_thread.title, 'W', sizeof(snapshot.current_thread.title) - 1);
+    snapshot.current_thread.title[sizeof(snapshot.current_thread.title) - 1] = '\0';
+    attention_ui_render(&snapshot);
+    lv_obj_update_layout(lv_screen_active());
+    assert(area(s_current_voice).x1 > area(s_current_title).x2);
+    assert(area(s_current_voice).x2 < area(s_current_card).x2);
+    attention_ui_show_detail_loading(snapshot.current_thread.id);
+    lv_obj_update_layout(lv_screen_active());
+    assert(area(s_detail_voice).x1 > area(s_detail_title).x2);
+    assert(area(s_detail_voice).x2 < area(lv_obj_get_parent(s_detail_title)).x2);
+    assert(lv_color_eq(lv_obj_get_style_text_color(s_detail_voice, 0), COLOR_RED));
+    attention_ui_show_list();
+
+    const char *capture = getenv("ATTENTION_UI_CAPTURE");
+    if (capture != NULL) {
+        s_title_font_index = 6;
+        s_subtitle_font_index = 4;
+        snapshot.count = 3;
+        strlcpy(snapshot.items[0].title, "Review display changes", sizeof(snapshot.items[0].title));
+        strlcpy(snapshot.items[1].title, "Device dictation", sizeof(snapshot.items[1].title));
+        strlcpy(snapshot.items[2].title, "Current task synchronization", sizeof(snapshot.items[2].title));
+        strlcpy(snapshot.current_thread.title, "Codex voice", sizeof(snapshot.current_thread.title));
+        snapshot.current_thread.voice_state = ATTENTION_VOICE_LISTENING;
+        attention_ui_render(&snapshot);
+        settle_scroll();
+        lv_refr_now(display);
+        FILE *image = fopen(capture, "wb");
+        assert(image != NULL);
+        fprintf(image, "P6\n410 502\n255\n");
+        for (unsigned i = 0; i < 410 * 502; ++i) {
+            const uint16_t pixel = displayed[i];
+            fputc(((pixel >> 11) & 31) * 255 / 31, image);
+            fputc(((pixel >> 5) & 63) * 255 / 63, image);
+            fputc((pixel & 31) * 255 / 31, image);
+        }
+        fclose(image);
+    }
+    printf("LVGL %d.%d.%d: list 341px; fixed card 80px; full-frame detail/settings return, scrolling, refresh, fonts, resize and status passed\n",
         LVGL_VERSION_MAJOR, LVGL_VERSION_MINOR, LVGL_VERSION_PATCH);
     lv_deinit();
     return 0;

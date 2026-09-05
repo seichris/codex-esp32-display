@@ -23,6 +23,10 @@ Coverage includes viewport height and card bounds at 410×502, fixed bottom
 position during selection/scrolling, scroll preservation through refreshes,
 shrinking lists, all title font sizes, long titles, empty state, a resized
 viewport, and controller-unavailable/unknown/inferred/confirmed status.
+The microphone indicator is checked beside short and long task names in both
+the bottom card and details, with the existing color mapping for all voice states.
+Set `ATTENTION_UI_CAPTURE=/tmp/attention-preview.ppm` when running
+`attention_ui_test` to save a rendered example screen.
 
 The framebuffer test now renders through the production RGB565 strip-transfer
 loop into a simulated panel. It compares every pixel of the list before and
@@ -33,8 +37,9 @@ pixels, and delayed DMA completion without overwriting an in-flight buffer.
 At PR #4's original `b9d2955`, the host reproduced scroll reset during refresh
 and the misleading empty-target message. The initial 410×502 layout measured a
 306-pixel list; the exact reported physical “tiny sliver” symptom was **not**
-reproduced. The new flex budget measures 309 pixels and keeps the 112-pixel
-bottom card fixed, with assertions covering the geometry. These tests do not
+reproduced. The original flex budget measured 309 pixels with a 112-pixel
+bottom card. Removing the caption row now gives the list 341 pixels with an
+80-pixel bottom card, with assertions covering the geometry. These tests do not
 establish physical rendering, touch behavior, Desktop selection observation,
 or Voice operation on the Waveshare device. Physical verification remains
 outstanding and requires a separately authorized flash.

@@ -13,7 +13,6 @@ static lv_obj_t *s_count_label;
 static lv_obj_t *s_status_dot;
 static lv_obj_t *s_list;
 static lv_obj_t *s_current_card;
-static lv_obj_t *s_current_caption;
 static lv_obj_t *s_current_title;
 static lv_obj_t *s_current_meta;
 static lv_obj_t *s_current_voice;
@@ -59,7 +58,7 @@ static const lv_color_t COLOR_RED = LV_COLOR_MAKE(255, 139, 151);
 #define LIST_HEADER_SETTINGS_INSET (LIST_HEADER_EDGE_INSET + SETTINGS_BUTTON_SIZE)
 #define DETAIL_TEXT_TOP_INSET 4
 #define DETAIL_BOTTOM_MARGIN 10
-#define CURRENT_CARD_HEIGHT 112
+#define CURRENT_CARD_HEIGHT 80
 #define CURRENT_CARD_BOTTOM 8
 #define LIST_VIEW_GAP 6
 #define SETTINGS_NVS_NAMESPACE "attention_ui"
@@ -290,25 +289,73 @@ static int32_t find_item(const char *thread_id)
     return -1;
 }
 
-static const char *voice_state_text(attention_voice_state_t state)
-{
-    switch (state) {
-        case ATTENTION_VOICE_READY: return "READY";
-        case ATTENTION_VOICE_FOCUSING: return "FOCUSING";
-        case ATTENTION_VOICE_STARTING: return "STARTING VOICE";
-        case ATTENTION_VOICE_LISTENING: return "MIC LIVE";
-        case ATTENTION_VOICE_MUTED: return "MIC MUTED";
-        case ATTENTION_VOICE_ERROR: return "VOICE ERROR";
-        default: return "VOICE UNKNOWN";
-    }
-}
-
 static lv_color_t voice_state_color(attention_voice_state_t state)
 {
     if (state == ATTENTION_VOICE_LISTENING) return COLOR_GREEN;
     if (state == ATTENTION_VOICE_ERROR) return COLOR_RED;
     if (state == ATTENTION_VOICE_FOCUSING || state == ATTENTION_VOICE_STARTING) return COLOR_AMBER;
     return COLOR_MUTED;
+}
+
+// Draw the microphone directly so it does not depend on an optional font glyph.
+static void draw_microphone(lv_event_t *event)
+{
+    lv_obj_t *icon = lv_event_get_target_obj(event);
+    lv_layer_t *layer = lv_event_get_layer(event);
+    lv_area_t bounds;
+    lv_obj_get_coords(icon, &bounds);
+    const lv_color_t color = lv_obj_get_style_text_color(icon, 0);
+    const int32_t x = bounds.x1;
+    const int32_t y = bounds.y1;
+
+    lv_draw_rect_dsc_t capsule;
+    lv_draw_rect_dsc_init(&capsule);
+    capsule.bg_opa = LV_OPA_TRANSP;
+    capsule.border_color = color;
+    capsule.border_width = 2;
+    capsule.radius = 5;
+    const lv_area_t body = {x + 7, y + 1, x + 16, y + 17};
+    lv_draw_rect(layer, &capsule, &body);
+
+    lv_draw_arc_dsc_t cradle;
+    lv_draw_arc_dsc_init(&cradle);
+    cradle.color = color;
+    cradle.width = 2;
+    cradle.center = (lv_point_t){x + 12, y + 14};
+    cradle.radius = 10;
+    cradle.start_angle = 0;
+    cradle.end_angle = 180;
+    lv_draw_arc(layer, &cradle);
+
+    lv_draw_line_dsc_t line;
+    lv_draw_line_dsc_init(&line);
+    line.color = color;
+    line.width = 2;
+    const int32_t segments[][4] = {{3, 11, 3, 14}, {21, 11, 21, 14},
+                                  {12, 23, 12, 27}, {7, 27, 17, 27}};
+    for (unsigned i = 0; i < sizeof(segments) / sizeof(segments[0]); ++i) {
+        line.p1 = (lv_point_precise_t){x + segments[i][0], y + segments[i][1]};
+        line.p2 = (lv_point_precise_t){x + segments[i][2], y + segments[i][3]};
+        lv_draw_line(layer, &line);
+    }
+}
+
+static lv_obj_t *create_microphone(lv_obj_t *parent)
+{
+    lv_obj_t *icon = lv_obj_create(parent);
+    lv_obj_remove_style_all(icon);
+    lv_obj_remove_flag(icon, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_size(icon, 24, 29);
+    lv_obj_set_style_text_color(icon, COLOR_MUTED, 0);
+    lv_obj_add_event_cb(icon, draw_microphone, LV_EVENT_DRAW_MAIN, NULL);
+    return icon;
+}
+
+static void position_microphone(lv_obj_t *icon, lv_obj_t *title)
+{
+    lv_obj_update_layout(title);
+    lv_obj_align_to(icon, title, LV_ALIGN_OUT_RIGHT_TOP, 8, 0);
+    lv_obj_invalidate(icon);
 }
 
 static void apply_selection(bool scroll)
@@ -411,22 +458,15 @@ static void create_current_card(void)
     lv_obj_set_style_pad_all(s_current_card, 10, 0);
     lv_obj_add_event_cb(s_current_card, current_card_clicked, LV_EVENT_CLICKED, NULL);
 
-    s_current_caption = lv_label_create(s_current_card);
-    lv_label_set_text(s_current_caption, "MAC TASK UNKNOWN");
-    set_common_text(s_current_caption, &lv_font_montserrat_14, COLOR_MUTED);
-    lv_obj_align(s_current_caption, LV_ALIGN_TOP_LEFT, 0, 0);
-
-    s_current_voice = lv_label_create(s_current_card);
-    lv_label_set_text(s_current_voice, "VOICE UNKNOWN");
-    set_common_text(s_current_voice, &lv_font_montserrat_14, COLOR_MUTED);
-    lv_obj_align(s_current_voice, LV_ALIGN_TOP_RIGHT, 0, 0);
+    s_current_voice = create_microphone(s_current_card);
 
     s_current_title = lv_label_create(s_current_card);
-    lv_obj_set_width(s_current_title, 364);
+    lv_obj_set_width(s_current_title, LV_SIZE_CONTENT);
+    lv_obj_set_style_max_width(s_current_title, 330, 0);
     lv_label_set_long_mode(s_current_title, LV_LABEL_LONG_DOT);
     lv_label_set_text(s_current_title, "Connecting to the Mac");
     set_common_text(s_current_title, &lv_font_montserrat_20, COLOR_TEXT);
-    lv_obj_align(s_current_title, LV_ALIGN_TOP_LEFT, 0, 27);
+    lv_obj_align(s_current_title, LV_ALIGN_TOP_LEFT, 0, 2);
 
     s_current_meta = lv_label_create(s_current_card);
     lv_obj_set_width(s_current_meta, 364);
@@ -441,7 +481,6 @@ static void update_current_card(void)
     if (s_current_card == NULL) return;
     const attention_current_thread_t *current = &s_snapshot.current_thread;
     if (!current->available) {
-        lv_label_set_text(s_current_caption, "MAC TASK UNKNOWN");
         if (s_snapshot.source_error[0] != '\0') {
             lv_label_set_text(s_current_title, "Bridge data unavailable");
             lv_label_set_text(s_current_meta, "Check the bridge and Wi-Fi");
@@ -458,8 +497,8 @@ static void update_current_card(void)
                 ? "For Voice, hold a button on a list task"
                 : "Desktop focus needs setup on the Mac");
         }
-        lv_label_set_text(s_current_voice, "VOICE UNKNOWN");
         lv_obj_set_style_text_color(s_current_voice, COLOR_MUTED, 0);
+        position_microphone(s_current_voice, s_current_title);
         lv_obj_add_state(s_current_card, LV_STATE_DISABLED);
         s_current_armed = false;
         if (s_selected_is_current) s_selected_is_current = false;
@@ -467,15 +506,9 @@ static void update_current_card(void)
     }
 
     lv_obj_clear_state(s_current_card, LV_STATE_DISABLED);
-    lv_label_set_text(
-        s_current_caption,
-        current->focus_confidence == ATTENTION_FOCUS_CONFIRMED
-            ? "CURRENT ON MAC"
-            : "VOICE TARGET"
-    );
     lv_label_set_text(s_current_title, current->title);
-    lv_label_set_text_fmt(s_current_meta, "%s  |  tap again for detail", current->project);
-    lv_label_set_text(s_current_voice, voice_state_text(current->voice_state));
+    lv_label_set_text(s_current_meta, current->project);
+    position_microphone(s_current_voice, s_current_title);
     lv_obj_set_style_text_color(s_current_voice, voice_state_color(current->voice_state), 0);
 }
 
@@ -636,7 +669,8 @@ static void create_detail_view(lv_obj_t *screen)
     lv_obj_set_style_pad_all(header, 14, 0);
 
     s_detail_title = lv_label_create(header);
-    lv_obj_set_width(s_detail_title, 350);
+    lv_obj_set_width(s_detail_title, LV_SIZE_CONTENT);
+    lv_obj_set_style_max_width(s_detail_title, 318, 0);
     lv_label_set_long_mode(s_detail_title, LV_LABEL_LONG_WRAP);
     lv_label_set_text(s_detail_title, "Loading…");
     set_common_text(s_detail_title, current_title_option()->font, COLOR_TEXT);
@@ -650,10 +684,7 @@ static void create_detail_view(lv_obj_t *screen)
     set_common_text(s_detail_meta, &lv_font_montserrat_16, COLOR_MUTED);
     lv_obj_align(s_detail_meta, LV_ALIGN_TOP_MID, 0, 0);
 
-    s_detail_voice = lv_label_create(header);
-    lv_label_set_text(s_detail_voice, "VOICE UNKNOWN");
-    set_common_text(s_detail_voice, &lv_font_montserrat_14, COLOR_MUTED);
-    lv_obj_align(s_detail_voice, LV_ALIGN_TOP_RIGHT, 0, 0);
+    s_detail_voice = create_microphone(header);
 
     s_detail_body = lv_obj_create(s_detail_view);
     lv_obj_set_size(s_detail_body, 382, 312);
@@ -683,6 +714,7 @@ static void position_detail_body(void)
     lv_obj_update_layout(s_detail_view);
     lv_obj_update_layout(header);
     lv_obj_update_layout(s_detail_title);
+    position_microphone(s_detail_voice, s_detail_title);
 
     const lv_coord_t header_y = lv_obj_get_y(header);
     const lv_coord_t title_y = lv_obj_get_y(s_detail_title);
@@ -712,7 +744,7 @@ static void update_detail_voice(void)
         && strcmp(s_detail_id, s_snapshot.current_thread.id) == 0) {
         state = s_snapshot.current_thread.voice_state;
     }
-    lv_label_set_text(s_detail_voice, voice_state_text(state));
+    position_microphone(s_detail_voice, s_detail_title);
     lv_obj_set_style_text_color(s_detail_voice, voice_state_color(state), 0);
 }
 
