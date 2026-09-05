@@ -213,7 +213,9 @@ static void make_root(lv_obj_t *root)
 {
     lv_obj_remove_flag(root, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_size(root, lv_pct(100), lv_pct(100));
-    lv_obj_set_style_bg_opa(root, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_radius(root, 0, 0);
+    lv_obj_set_style_bg_color(root, COLOR_BG, 0);
+    lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(root, 0, 0);
     lv_obj_set_style_pad_all(root, 0, 0);
 }
@@ -904,6 +906,7 @@ void attention_ui_init(
     lv_obj_set_style_bg_color(screen, COLOR_BG, 0);
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_all(screen, 0, 0);
+    lv_obj_remove_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
 
     create_list_view(screen);
     create_detail_view(screen);
@@ -1060,6 +1063,7 @@ void attention_ui_show_list(void)
     lv_obj_add_flag(s_settings_view, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(s_list_view, LV_OBJ_FLAG_HIDDEN);
     apply_selection(true);
+    lv_obj_invalidate(lv_screen_active());
 }
 
 void attention_ui_show_settings(void)
@@ -1069,6 +1073,7 @@ void attention_ui_show_settings(void)
     lv_obj_add_flag(s_detail_view, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(s_settings_view, LV_OBJ_FLAG_HIDDEN);
     apply_font_settings();
+    lv_obj_invalidate(lv_screen_active());
 }
 
 void attention_ui_show_detail_loading(const char *thread_id)
@@ -1094,6 +1099,7 @@ void attention_ui_show_detail_loading(const char *thread_id)
     scroll_detail_to_end();
     lv_obj_add_flag(s_list_view, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(s_detail_view, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_invalidate(lv_screen_active());
 }
 
 void attention_ui_render_detail(const attention_detail_t *detail)

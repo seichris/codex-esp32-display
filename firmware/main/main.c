@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "attention_client.h"
+#include "attention_display.h"
 #include "attention_audio.h"
 #include "attention_model.h"
 #include "attention_ui.h"
@@ -386,7 +387,7 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(nvs_result);
 
-    lv_display_t *display = bsp_display_start();
+    lv_display_t *display = attention_display_start();
     if (display == NULL) {
         ESP_LOGE(TAG, "Could not start Waveshare display BSP");
         return;

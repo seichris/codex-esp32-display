@@ -5,6 +5,8 @@ idf_component_register(
         "wifi_manager.c"
         "attention_client.c"
         "attention_ui.c"
+        "attention_display.c"
+        "display_frame.c"
         "button_input.c"
         "voice_audio.c"
         "usb_microphone.c"
@@ -14,6 +16,7 @@ idf_component_register(
         esp_driver_gpio
         esp_driver_i2c
         esp_event
+        esp_lcd
         esp_codec_dev
         esp_http_client
         esp_netif

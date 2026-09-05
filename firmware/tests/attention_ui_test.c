@@ -5,6 +5,30 @@
 // Exercise the production UI with real LVGL, exposing internal objects only in
 // this test translation unit. NVS alone is stubbed; no display hardware is used.
 #include "../main/attention_ui.c"
+#include "display_frame.h"
+
+static uint16_t draw_buffer[DISPLAY_FRAME_WIDTH * DISPLAY_FRAME_HEIGHT];
+static uint16_t displayed[DISPLAY_FRAME_WIDTH * DISPLAY_FRAME_HEIGHT];
+static uint16_t list_image[DISPLAY_FRAME_WIDTH * DISPLAY_FRAME_HEIGHT];
+static uint8_t dma_buffer[DISPLAY_FRAME_STRIP_BYTES];
+
+static int panel_ready(void *context) { (void)context; return 0; }
+static int panel_strip(void *context, unsigned y, unsigned rows, const uint8_t *pixels, size_t bytes)
+{
+    (void)context;
+    assert(bytes == rows * DISPLAY_FRAME_WIDTH * 2);
+    for (unsigned i = 0; i < rows * DISPLAY_FRAME_WIDTH; ++i) {
+        displayed[y * DISPLAY_FRAME_WIDTH + i] = (uint16_t)((pixels[2*i] << 8) | pixels[2*i+1]);
+    }
+    return 0;
+}
+static void flush(lv_display_t *display, const lv_area_t *bounds, uint8_t *pixels)
+{
+    assert(bounds->x1 == 0 && bounds->y1 == 0 && bounds->x2 == 409 && bounds->y2 == 501);
+    const display_frame_io_t io = {.wait = panel_ready, .write = panel_strip};
+    assert(display_frame_send((const uint16_t *)pixels, dma_buffer, &io) == 0);
+    lv_display_flush_ready(display);
+}
 
 static lv_area_t area(lv_obj_t *object)
 {
@@ -38,6 +62,9 @@ int main(void)
 {
     lv_init();
     lv_display_t *display = lv_display_create(410, 502);
+    lv_display_set_color_format(display, LV_COLOR_FORMAT_RGB565);
+    lv_display_set_buffers(display, draw_buffer, NULL, sizeof(draw_buffer), LV_DISPLAY_RENDER_MODE_FULL);
+    lv_display_set_flush_cb(display, flush);
     attention_ui_init(NULL, NULL, NULL);
     attention_snapshot_t snapshot = { .count = 8, .total_count = 8, .desktop_state_available = true };
     for (unsigned i = 0; i < CONFIG_CODEX_ATTENTION_MAX_ITEMS; ++i) {
@@ -49,6 +76,33 @@ int main(void)
     attention_ui_render(&snapshot);
     assert_viewport();
     assert(lv_obj_get_height(s_list) == 309);
+    settle_scroll();
+    lv_refr_now(display);
+    memcpy(list_image, displayed, sizeof(list_image));
+    unsigned text_pixels = 0;
+    for (int y = 75; y < 340; ++y) for (int x = 20; x < 390; ++x) {
+        if (displayed[y * 410 + x] != lv_color_to_u16(COLOR_BG)) ++text_pixels;
+    }
+    assert(text_pixels > 1000);
+    attention_ui_show_detail_loading(snapshot.items[0].id);
+    attention_detail_t detail = {0};
+    strlcpy(detail.id, snapshot.items[0].id, sizeof(detail.id));
+    strlcpy(detail.title, "Detail screen", sizeof(detail.title));
+    strlcpy(detail.text, "DETAIL TEXT MUST DISAPPEAR\n\nReturning to the list must replace every pixel, including the background.", sizeof(detail.text));
+    attention_ui_render_detail(&detail);
+    settle_scroll();
+    lv_refr_now(display);
+    assert(memcmp(list_image, displayed, sizeof(list_image)) != 0);
+    attention_ui_show_list();
+    settle_scroll();
+    lv_refr_now(display);
+    assert(memcmp(list_image, displayed, sizeof(list_image)) == 0);
+    attention_ui_show_settings();
+    settle_scroll();
+    attention_ui_show_list();
+    settle_scroll();
+    lv_refr_now(display);
+    assert(memcmp(list_image, displayed, sizeof(list_image)) == 0);
     const lv_area_t fixed = area(s_current_card);
     assert(area(s_card_titles[0]).y1 >= area(s_list).y1);
     assert(area(s_card_titles[0]).y2 <= area(s_list).y2);
@@ -86,9 +140,10 @@ int main(void)
     }
 
     // The remaining-space budget also holds if the root viewport changes.
-    lv_display_set_resolution(display, 410, 450);
-    assert_viewport();
-    lv_display_set_resolution(display, 410, 502);
+    lv_obj_set_height(s_list_view, 450);
+    lv_obj_update_layout(s_list_view);
+    assert(lv_obj_get_height(s_list) == 257);
+    lv_obj_set_height(s_list_view, lv_pct(100));
     snapshot.count = 0;
     attention_ui_render(&snapshot);
     assert_viewport();
@@ -124,7 +179,7 @@ int main(void)
     attention_ui_render(&snapshot);
     assert(strcmp(lv_label_get_text(s_current_caption), "CURRENT ON MAC") == 0);
     assert_viewport();
-    printf("LVGL %d.%d.%d: list 309px; fixed card 112px; scrolling, refresh, fonts, resize and status passed\n",
+    printf("LVGL %d.%d.%d: list 309px; fixed card 112px; full-frame detail/settings return, scrolling, refresh, fonts, resize and status passed\n",
         LVGL_VERSION_MAJOR, LVGL_VERSION_MINOR, LVGL_VERSION_PATCH);
     lv_deinit();
     return 0;

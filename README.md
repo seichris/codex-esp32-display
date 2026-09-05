@@ -50,6 +50,8 @@ The bridge has no runtime npm dependencies.
 - targets the Waveshare ESP32-S3-Touch-AMOLED-2.06 only;
 - uses Waveshare's managed BSP and LVGL 9.5;
 - renders a touch-scrollable 410×502 inbox;
+- redraws complete screens through reserved DMA strips, with checked transfers
+  and retries so failed updates are not silently accepted;
 - renders a fixed bottom card for the current or targeted Desktop Voice thread;
 - preserves the selected thread across list refreshes;
 - reads BOOT on GPIO0 and the PWR short/long-press latches from the AXP2101 over the
