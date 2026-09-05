@@ -49,7 +49,12 @@ The running app with bundle ID `com.openai.codex` is preferred when opening task
 links, because a newer ChatGPT.app and an older Codex.app can coexist. If multiple
 copies are running and none is active, handoff fails rather than guessing.
 URL acceptance is not treated as proof that the composer displayed the text.
-Manual task selection on the Mac is not yet synchronized to the device.
+Manual task selection on the Mac is not yet synchronized to the device. The
+current Codex build exposes its bootstrap app document through Accessibility,
+while task navigation happens in memory. The companion explicitly reports that
+limitation instead of guessing from `initialRoute`. Voice Settings → **Show
+Detection Log** reveals the bounded operational log. See
+[`docs/focused-task-sync.md`](../docs/focused-task-sync.md).
 
 Diagnostics are written to
 `~/Library/Logs/CodexESP32Display/dictation.log`: timestamps, stages, sample
@@ -72,3 +77,17 @@ Rebuild after changing the bridge config.
 
 The previous `com.seichris.codex-esp32-display` LaunchAgent should remain
 unloaded while this app owns port `5180`.
+
+## Stable local signing
+
+For repeated local builds, choose an existing Apple Development signing identity
+using `CODEX_DISPLAY_SIGN_IDENTITY` or place its fingerprint in the ignored
+`macos/.signing-identity` file. The build fails if the chosen identity cannot sign;
+it does not silently fall back to ad hoc signing. Without a selection, the build
+uses an ad hoc signature and warns that privacy permissions may need reapproval
+when the binary changes. No certificate or private key is stored in this repo.
+
+Changing from ad hoc to certificate signing requires one fresh permission grant.
+Keep the app's installation path and signing identity stable for later updates.
+The build verifies its completed signature. Do not weaken the designated
+requirement to an identifier-only rule to work around privacy checks.

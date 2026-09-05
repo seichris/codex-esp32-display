@@ -25,6 +25,27 @@ final class FocusedTaskSelectionTests: XCTestCase {
         XCTAssertNil(remote.threadId)
     }
 
+    func testBootstrapDocumentCannotConfirmItsStaleInitialRoute() {
+        for source in ["app://-/index.html", "app://-/index.html?initialRoute=/local/\(id)",
+                       "app://-/index.html?initialRoute=%2Flocal%2F\(id)%3FhostId%3Dlocal"] {
+            let selection = FocusedTaskSelection.document(source)
+            XCTAssertEqual(selection.status, .unavailable)
+            XCTAssertNil(selection.threadId)
+        }
+    }
+
+    func testOperationalDiagnosticsDoNotIncludeSelectionContent() throws {
+        var diagnostic = FocusedTaskDiagnostic(reason: "shell-document")
+        diagnostic.axErrors["AXDocument"] = -25205
+        diagnostic.visited = 8
+        diagnostic.webAreas = 1
+        let data = try JSONEncoder().encode(diagnostic)
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(Set(payload.keys), Set(["reason", "appCount", "processID", "trusted", "axErrors", "visited", "webAreas", "candidates", "elapsedMilliseconds"]))
+        XCTAssertFalse(diagnostic.message.contains("permission"))
+        XCTAssertNotEqual(diagnostic.message, FocusedTaskDiagnostic(reason: "permission-needed").message)
+    }
+
     func testNonTaskNavigationClearsIdentity() {
         for source in ["app://-/", "app://-/local/new", "app://-/settings", "app://-/work/conversation/\(id)"] {
             let selection = FocusedTaskSelection.document(source)

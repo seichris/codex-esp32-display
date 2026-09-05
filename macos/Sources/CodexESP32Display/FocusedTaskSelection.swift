@@ -17,6 +17,9 @@ struct FocusedTaskSelection: Equatable {
         guard value.count <= 4096, let url = URLComponents(string: value), url.scheme == "app",
               url.host == "-", url.user == nil, url.password == nil,
               url.port == nil, url.fragment == nil else { return .unavailable(at: date) }
+        // Codex uses a memory router. index.html (including initialRoute) is
+        // a bootstrap document, not evidence of the currently selected task.
+        guard url.path != "/index.html" else { return .unavailable(at: date) }
         let parts = url.path.split(separator: "/", omittingEmptySubsequences: true)
         guard parts.count == 2, parts[0] == "local", parts[1] != "new" else {
             return Self(status: .noTask, observedAt: date)

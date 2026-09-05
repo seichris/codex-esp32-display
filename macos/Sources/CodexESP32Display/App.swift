@@ -11,6 +11,11 @@ final class CodexESP32DisplayAppDelegate: NSObject, NSApplicationDelegate {
         if !DictationRecorder.permissionReady { bridge.openVoiceSettings() }
     }
 
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        bridge.openVoiceSettings()
+        return true
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         statusItemController?.invalidate()
         BridgeController.active?.stop()

@@ -21,3 +21,6 @@ firmware/managed_components/
 # macOS menu-bar companion
 macos/.build/
 macos/build/
+
+# Local certificate selection for stable development signing
+macos/.signing-identity

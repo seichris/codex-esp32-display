@@ -1,5 +1,77 @@
 # Focused task synchronization investigation
 
+## Live findings on 2026-09-05
+
+Automatic current-task detection is **not working on the tested Codex build**.
+The installed companion contains both dictation and the observer; installing the
+combined code was not sufficient to make the document-URL assumption valid.
+
+- Verified the running companion against the signed local build and verified
+  that it contains `FocusedTaskObserver`, `FocusedTaskSelection`,
+  `DictationRecorder` and `DictationModel`.
+- Accessibility originally appeared enabled in System Settings while the running
+  companion reported untrusted. A bundle-scoped permission reset and regrant
+  fixed that mismatch. Rebuilding with an ad hoc signature reproduced it: the
+  designated requirement was the binary's changing `cdhash`. Local builds now
+  support an Apple Development signing identity with a stable designated
+  requirement. The identity selection is local and ignored by Git.
+- With permission granted, operational logs showed one Codex process, successful
+  AX reads, eight structural nodes, one web area and one app-origin document
+  candidate. Reads took about 1–17 ms. Electron's documented
+  `AXManualAccessibility` setup returned `-25205` (attribute unsupported) on this
+  installation; the subsequent metadata reads still succeeded.
+- The installed `/Applications/ChatGPT.app` renderer
+  `webview/assets/app-initial-7a6c8787453d.js` uses a memory-history router
+  (`Mvn` / `UDo`). The main-process bundle
+  `.vite/build/window-all-closed-D6_N7yxp.js` constructs
+  `app://-/index.html` with an optional `initialRoute` parameter.
+- In the renderer's `navigate-to-route` handler, `initialRoute` is updated only
+  when `persistForReload` is true. Ordinary in-memory navigation does not make
+  the top-level document URL an authoritative current-task route. Reading
+  `initialRoute` would risk stale confirmation and is explicitly rejected.
+- The app still emits an internal active-task event. Static evidence of that
+  event is not evidence of an externally supported subscription. No supported
+  current-desktop-selection endpoint was identified in the public app-server
+  interface during this investigation. This is not a claim that such an
+  integration is impossible in principle.
+
+The second certificate-signed update retained Accessibility permission without
+another reset. Its live log reports `trusted: true`, `reason: shell-document`,
+one web area and one candidate. The authenticated bridge is connected and has
+no current task; dictation readiness remains true. The final build passes all
+16 macOS tests and signature verification. No firmware was changed or flashed.
+
+The companion now distinguishes missing permission, missing windows, AX read
+errors, bounded-scan limits, missing or ambiguous documents, and the bootstrap
+app document. It keeps the device's selection unavailable when only the app
+shell is exposed. This prevents false confirmation; it does not implement a new
+source of live task selection.
+
+### Diagnostic logs
+
+`~/Library/Logs/CodexESP32Display/focused-task.log` records timestamp, reason,
+process count/PID, trust status, the accessibility-setup result when attempted,
+AX error codes keyed by attribute, visited-node/web-area/candidate counts and
+elapsed milliseconds. It never records raw URLs, task IDs, window titles,
+transcripts, clipboard contents or credentials. Changes are logged immediately;
+unchanged state is logged at most every 30 seconds. Files are mode 0600 with a
+256 KiB rotation threshold and one previous file.
+
+Voice Settings includes **Show Detection Log**, and reopening the menu-bar app
+opens Voice Settings. To qualify a future selection source, switch between two
+known tasks and verify exact identity changes through the authenticated bridge;
+then test settings/new-task pages, multiple windows, stale reads and unsupported
+hosts. A working window read alone is not a successful selection test.
+
+### Sources
+
+- [Electron accessibility setup](https://www.electronjs.org/docs/latest/tutorial/accessibility)
+- [Apple code-signing requirements and privacy identity](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements)
+- [Apple bounded AX attribute reads](https://developer.apple.com/documentation/applicationservices/1462060-axuielementcopyattributevalues)
+- [Public Codex app-server protocol](https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md)
+
+## Earlier design and evidence
+
 ## Intended behavior
 
 The fixed bottom card follows the task open in the most recently focused Codex
@@ -9,7 +81,7 @@ Switching to another Mac app does not itself select a different Codex task.
 Settings, a new-task page, closing the window, and an unreadable selection must
 not leave a previous task labeled as confirmed current.
 
-## Verified evidence, 2026-09-05
+## Earlier source inspection, 2026-09-05
 
 Inspected installed Codex version 26.803.41515, build 6321, without modifying it.
 
@@ -84,7 +156,7 @@ current task. Only attach session status when the target identities agree.
 - Select remote/ChatGPT content: resolve the correct backend or report it as
   unsupported, never show a coincident local task.
 
-## Implementation and delivery status
+## Initial observer implementation at 4be9bad (historical)
 
 The companion now includes `FocusedTaskObserver`, a read-only macOS Accessibility
 adapter, and a strict `FocusedTaskSelection` policy. It observes the focused/main
