@@ -49,12 +49,13 @@ The running app with bundle ID `com.openai.codex` is preferred when opening task
 links, because a newer ChatGPT.app and an older Codex.app can coexist. If multiple
 copies are running and none is active, handoff fails rather than guessing.
 URL acceptance is not treated as proof that the composer displayed the text.
-Manual task selection on the Mac is not yet synchronized to the device. The
-current Codex build exposes its bootstrap app document through Accessibility,
-while task navigation happens in memory. The companion explicitly reports that
-limitation instead of guessing from `initialRoute`. Voice Settings → **Show
-Detection Log** reveals the bounded operational log. See
-[`docs/focused-task-sync.md`](../docs/focused-task-sync.md).
+Manual task selection now follows Codex's local task-presentation events. The
+companion verifies the local broker, tracks exact task IDs per source client,
+reconnects on failures, and clears ambiguous or unavailable selection. Multiple
+presented task views are treated as ambiguous; remote task hosts are not yet
+supported. This private interface is version checked and requires no Accessibility
+permission. Voice Settings → **Show Detection Log** reveals the bounded
+operational log. See [`docs/focused-task-sync.md`](../docs/focused-task-sync.md).
 
 Diagnostics are written to
 `~/Library/Logs/CodexESP32Display/dictation.log`: timestamps, stages, sample

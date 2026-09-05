@@ -1,8 +1,59 @@
 # Focused task synchronization investigation
 
-## Live findings on 2026-09-05
+## Local event implementation — 2026-09-05
 
-Automatic current-task detection is **not working on the tested Codex build**.
+The companion now observes `thread-stream-following-changed` version 1 over the
+existing `~/.codex/ipc/ipc.sock`. The tested Codex renderer sends this event when
+its task view is presented or removed, and announces existing followed tasks to
+new clients. This is a private, version-checked interface, not a documented public
+active-window API. No Accessibility permission is needed for this detector. The companion also
+prefers the running Desktop app’s bundled CLI for metadata, avoiding an older
+PATH CLI that cannot interpret the same task storage.
+
+`TaskEventConnection` verifies socket/directory ownership and permissions, the
+same-user peer UID, and the broker PID's `com.openai.codex` bundle identity. It
+uses bounded nonblocking I/O, a two-MiB frame cap, a two-second initialization
+acknowledgement deadline, recurring idempotent initialization for liveness, and
+bounded reconnect backoff. It never subscribes to task contents, claims task
+ownership, or sends turn-control methods. Unknown or malformed selection events
+invalidate the connection. Only operational counts/reasons are logged.
+
+`TaskEventState` tracks exact task and host IDs per source client. Leave events
+and client disconnections remove only that client's matching state. Paired
+leave/enter events settle before confirmation. Zero candidates yields no task;
+multiple presented targets (including the same task in two clients) yield
+unavailable, instead of choosing whichever event arrived last. A remote target
+is unsupported and cannot resolve against a coincident local ID. Disconnects
+clear selection; main-thread observations still expire if updates stop.
+
+This intentionally replaces the earlier focused-window promise with an
+unambiguous-open-task contract. Multiple windows and auxiliary task views need
+further physical qualification; the event itself does not identify the most
+recently focused native window. Other same-user clients can also participate in
+this private broker, so source IDs are tracked rather than treated as window IDs.
+
+### Validation
+
+- Read-only probe: two A → B → A round trips matched exact IDs and following
+  booleans. Reconnect announced the already-open task. A later leave event matched
+  the user's explicit confirmation of manual navigation away.
+- Installed signed companion: operational log changed from `shell-document` to
+  `confirmed`; authenticated bridge state and attention payload resolved exact IDs
+  and titles for “Codex voice” and “Codex voice (2)”.
+- 25 macOS tests passed, including fragmented/coalesced frames, invalid sizes,
+  incompatible selection events, source isolation, ambiguous views, disconnects,
+  remote hosts, task switching, non-task state, and existing dictation behavior.
+- 26 bridge tests passed. Signed release companion and ESP-IDF 5.4.4 firmware
+  builds passed. Existing firmware protocol is unchanged.
+- Firmware was flashed to the connected ESP32-S3 and esptool verified the written
+  data. Display behavior after the required power cycle is a separate user check.
+
+`trusted` in new event diagnostic rows means the local broker peer was verified;
+in historical Accessibility rows it meant AX permission was granted.
+
+## Earlier Accessibility findings on 2026-09-05
+
+The earlier Accessibility implementation did **not** detect tasks on the tested Codex build.
 The installed companion contains both dictation and the observer; installing the
 combined code was not sufficient to make the document-URL assumption valid.
 

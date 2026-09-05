@@ -308,7 +308,10 @@ final class BridgeController: ObservableObject {
 
     private static func resolveCodex() -> URL? {
         let fileManager = FileManager.default
-        let candidates = [
+        // Read metadata with the same Desktop version that owns the event
+        // connection. An older PATH CLI may not understand its task storage.
+        let bundled = CodexAppLink.applicationURL?.appendingPathComponent("Contents/Resources/codex").path
+        let candidates = [bundled].compactMap { $0 } + [
             "/opt/homebrew/bin/codex",
             "/usr/local/bin/codex",
             fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin/codex").path,
