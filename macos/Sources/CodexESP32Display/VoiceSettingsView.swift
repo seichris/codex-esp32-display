@@ -31,10 +31,12 @@ struct VoiceSettingsView: View {
         }
         .formStyle(.grouped).padding().frame(width: 550, height: 560)
         .onAppear { microphoneConnected = DictationRecorder.device != nil }
-        .onReceive(NotificationCenter.default.publisher(for: AVCaptureDevice.wasConnectedNotification)) { _ in
+        // Stable AVFoundation notification names also compile with the older
+        // macOS SDK used by CI, before the Swift member names were introduced.
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("AVCaptureDeviceWasConnectedNotification"))) { _ in
             microphoneConnected = DictationRecorder.device != nil
         }
-        .onReceive(NotificationCenter.default.publisher(for: AVCaptureDevice.wasDisconnectedNotification)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("AVCaptureDeviceWasDisconnectedNotification"))) { _ in
             microphoneConnected = DictationRecorder.device != nil
         }
     }
