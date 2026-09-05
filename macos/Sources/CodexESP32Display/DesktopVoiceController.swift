@@ -48,6 +48,7 @@ final class DesktopVoiceController: ObservableObject {
     @Published private(set) var lastError: String?
 
     let dictation = DictationModel()
+    let focusedTask = FocusedTaskObserver()
 
     private let fileManager = FileManager.default
     private let root: URL
@@ -110,6 +111,16 @@ final class DesktopVoiceController: ObservableObject {
         )
     }
 
+    private var observedStatePayload: DesktopStatePayload {
+        let selection = focusedTask.selection
+        return DesktopStatePayload(
+            threadId: selection.threadId,
+            focusConfidence: selection.status == .confirmed ? "confirmed" : "unavailable",
+            voiceState: selection.voiceState(for: dictation.session.threadId, state: dictation.wireState),
+            capabilities: capabilities
+        )
+    }
+
     private func prepareDirectories() throws {
         try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: root.appendingPathComponent("requests"), withIntermediateDirectories: true)
@@ -148,7 +159,7 @@ final class DesktopVoiceController: ObservableObject {
         let response: DesktopIPCResponse
         switch request.operation {
         case "state":
-            response = success(request.ipcId)
+            response = success(request.ipcId, observed: true)
         case "focus":
             Task {
                 let response = await focus(request)
@@ -218,14 +229,14 @@ final class DesktopVoiceController: ObservableObject {
         }
     }
 
-    private func success(_ ipcId: String) -> DesktopIPCResponse {
+    private func success(_ ipcId: String, observed: Bool = false) -> DesktopIPCResponse {
         DesktopIPCResponse(
             ipcId: ipcId,
             ok: true,
             error: nil,
             message: nil,
             statusCode: nil,
-            state: statePayload
+            state: observed ? observedStatePayload : statePayload
         )
     }
 

@@ -26,8 +26,11 @@ struct VoiceSettingsView: View {
                 }.disabled(requesting)
                 Button("Open Dictation") { dictation.showWindow() }
             }
+            if let observer = BridgeController.active?.desktopVoiceController.focusedTask {
+                FocusedTaskStatusView(observer: observer)
+            }
         }
-        .formStyle(.grouped).padding().frame(width: 550, height: 420)
+        .formStyle(.grouped).padding().frame(width: 550, height: 560)
     }
     private func readiness(_ title: String, ok: Bool) -> some View {
         Label(title, systemImage: ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")

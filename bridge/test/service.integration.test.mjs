@@ -8,6 +8,7 @@ import { CodexAttentionService } from '../src/service.mjs';
 const WAITING = '019a4444-4444-7444-8444-444444444444';
 const UNREAD = '019a5555-5555-7555-8555-555555555555';
 const PINNED = '019a6666-6666-7666-8666-666666666666';
+const OLD = '019a7777-7777-7777-8777-777777777777';
 
 test('service performs App Server handshake and merges unread plus pinned state', async () => {
   const root = await mkdtemp(join(tmpdir(), 'codex-attention-'));
@@ -33,6 +34,9 @@ rl.on('line', line => {
     process.stdout.write(JSON.stringify({ id: message.id, result: { codexHome: process.env.CODEX_HOME } }) + '\\n');
   } else if (message.method === 'thread/list') {
     process.stdout.write(JSON.stringify({ id: message.id, result: { data: threads, nextCursor: null } }) + '\\n');
+  } else if (message.method === 'thread/read') {
+    const thread = { id: '${OLD}', name: 'Old unpinned task', cwd: '/tmp/old-project', updatedAt: 1700000000, status: { type: 'idle' } };
+    process.stdout.write(JSON.stringify({ id: message.id, result: { thread } }) + '\\n');
   } else if (message.method === 'thread/turns/list') {
     const text = message.params.threadId === '${WAITING}'
       ? 'Please approve the firmware flash.'
@@ -86,6 +90,19 @@ rl.on('line', line => {
 
     const sanitized = await service.latestThread(PINNED);
     assert.equal(sanitized.text, 'Latest result');
+
+    // Manual navigation changes the current card independently of the inbox.
+    // An old task outside all list pages is resolved by exact ID.
+    controllerState = { ...controllerState, threadId: OLD, focusConfidence: 'confirmed', voiceState: 'unknown' };
+    await service.refresh();
+    assert.equal(service.snapshot.currentThread.id, OLD);
+    assert.equal(service.snapshot.currentThread.title, 'Old unpinned task');
+    assert.equal(service.snapshot.currentThread.focusConfidence, 'confirmed');
+    assert.equal(service.snapshot.items.some((item) => item.id === OLD), false);
+    controllerState = { ...controllerState, threadId: UNREAD };
+    await service.refresh();
+    assert.equal(service.snapshot.currentThread.id, UNREAD);
+    assert.equal(service.snapshot.currentThread.voiceState, 'unknown');
 
     // The companion can be healthy while the Mac selection is unobserved.
     // Unread/pinned/recent tasks are not evidence of the selected Mac task.
