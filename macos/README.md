@@ -16,19 +16,51 @@ The app starts `bridge/src/index.mjs` and writes its output to
 start/stop, the local dashboard, endpoint copying, log reveal, Desktop Voice
 status, Voice Settings, and quit.
 
-Desktop Voice control is deliberately split between supported local mechanisms:
+## Device dictation
 
-- the companion asks Codex Desktop to focus a thread using its configurable
-  `codex://threads/{threadId}` URL template;
-- after that focus request succeeds, it invokes the configured Codex Voice
-  keyboard shortcut (default: Control-Option-Space);
-- the ESP32 USB microphone remains enumerated, while firmware switches its PCM
-  stream between live audio and silence for listen/mute.
+Open **Voice Settings… → Enable Dictation Permissions**. Both Microphone and
+Speech Recognition must be allowed; Accessibility is no longer used for
+recording or draft handoff. On-device English speech recognition must be
+available. The microphone is selected by its full Waveshare USB unique ID;
+the companion never falls back to the Mac's built-in input or changes the
+system default microphone.
 
-Open **Voice Settings…** from the menu to change the shortcut or thread URL
-template. Accessibility permission is required for shortcut injection. The
-companion reports URL-based focus as inferred rather than confirmed because
-Codex Desktop does not currently expose a public selected-thread/Voice API.
+1. Select a task on the device and hold either button for one second.
+2. Wait for `LISTENING`. That acknowledgement requires a real USB sample buffer
+   from an active capture session, not merely a posted keyboard shortcut.
+3. Speak, then hold again. This closes the device PCM gate and calls
+   `endAudio()` on the local speech request so transcription can finish.
+4. Review the text in **Device Dictation**. **Open as Task Draft** uses the
+   recorded task ID and a percent-encoded `prompt` query in its Codex deep link.
+   This replaces any existing composer text; it never sends a message.
+   The companion keeps its copy until **Discard**, with **Copy Text** as a fallback.
+
+The exact target is pinned for a recording. Switching targets while recording,
+overwriting a pending draft, and late callbacks from previous recordings are
+rejected. Recording ends after 55 seconds; finalization has a 10-second timeout
+and retains partial text on failure. The existing firmware uses `VOICE MUTED`
+while the companion finishes transcription and `VOICE READY` when a draft exists.
+The updated firmware closes its gate when a fresh companion snapshot reports
+that recording ended or became unavailable, and enforces a 60-second local
+limit even if networking fails. Older firmware still needs the second physical
+press to close the gate after automatic host-side completion.
+
+The running app with bundle ID `com.openai.codex` is preferred when opening task
+links, because a newer ChatGPT.app and an older Codex.app can coexist. If multiple
+copies are running and none is active, handoff fails rather than guessing.
+URL acceptance is not treated as proof that the composer displayed the text.
+Manual task selection on the Mac is not yet synchronized to the device.
+
+Diagnostics are written to
+`~/Library/Logs/CodexESP32Display/dictation.log`: timestamps, stages, sample
+counts and input peaks only. No audio, transcript text, task IDs or credentials
+are logged. Inspect that file for capture/finalization evidence; old permission
+errors in `bridge.log` are not evidence of a new dictation failure.
+
+Local validation: `swift test --package-path macos` covers session ownership,
+stale callbacks, partial-text preservation, no-speech failures, stop/start races,
+and exact target/text URL encoding. The release app build and live USB speech
+acceptance remain separate checks.
 
 The private bridge/controller channel is a per-launch, mode-0700 temporary
 directory with a random token. Desktop-control commands are not exposed as an

@@ -46,3 +46,12 @@ jobs:
           esp_idf_version: v5.4.4
           target: esp32s3
           path: firmware
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test dictation session and task draft routing
+        run: swift test --package-path macos
+      - name: Build menu-bar companion
+        run: swift build --package-path macos --configuration release

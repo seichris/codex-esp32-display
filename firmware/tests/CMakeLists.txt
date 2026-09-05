@@ -15,3 +15,7 @@ add_test(NAME attention_ui COMMAND attention_ui_test)
 add_executable(display_frame_test display_frame_test.c ../main/display_frame.c)
 target_include_directories(display_frame_test PRIVATE ../main)
 add_test(NAME display_frame COMMAND display_frame_test)
+
+add_executable(voice_control_test voice_control_test.c ../main/voice_control.c)
+target_include_directories(voice_control_test PRIVATE stubs ../main)
+add_test(NAME voice_control COMMAND voice_control_test)

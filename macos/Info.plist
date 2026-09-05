@@ -18,6 +18,10 @@
 	<string>0.2.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Record your Waveshare USB microphone when you start device dictation.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Transcribe device dictation locally on this Mac for review in your selected Codex task.</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
 	<key>LSUIElement</key>

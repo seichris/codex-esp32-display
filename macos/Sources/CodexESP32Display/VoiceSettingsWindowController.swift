@@ -5,8 +5,8 @@ import SwiftUI
 /// settings environment, and responder-chain settings selectors can go unhandled.
 @MainActor
 final class VoiceSettingsWindowController: NSWindowController {
-    init() {
-        let window = NSWindow(contentViewController: NSHostingController(rootView: VoiceSettingsView()))
+    init(dictation: DictationModel) {
+        let window = NSWindow(contentViewController: NSHostingController(rootView: VoiceSettingsView(dictation: dictation)))
         window.title = "Voice Settings"
         window.styleMask = [.titled, .closable, .miniaturizable]
         window.isReleasedWhenClosed = false

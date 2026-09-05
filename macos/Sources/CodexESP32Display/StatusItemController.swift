@@ -91,6 +91,9 @@ final class StatusItemController: NSObject {
         )
         voiceSettingsItem.target = self
         menu.addItem(voiceSettingsItem)
+        let dictationItem = NSMenuItem(title: "Open Dictation…", action: #selector(openDictation), keyEquivalent: "")
+        dictationItem.target = self
+        menu.addItem(dictationItem)
 
         menu.addItem(.separator())
 
@@ -160,6 +163,10 @@ final class StatusItemController: NSObject {
 
     @objc private func openVoiceSettings() {
         bridge.openVoiceSettings()
+    }
+
+    @objc private func openDictation() {
+        bridge.desktopVoiceController.dictation.showWindow()
     }
 
     @objc private func quit() {

@@ -47,6 +47,9 @@ final class DesktopVoiceController: ObservableObject {
     @Published private(set) var voiceState = "unknown"
     @Published private(set) var lastError: String?
 
+    let dictation = DictationModel()
+    let focusedTask = FocusedTaskObserver()
+
     private let fileManager = FileManager.default
     private let root: URL
     private let token: String
@@ -62,6 +65,11 @@ final class DesktopVoiceController: ObservableObject {
             + UUID().uuidString.replacingOccurrences(of: "-", with: "")
         do {
             try prepareDirectories()
+            dictation.onStateChange = { [weak self] in
+                guard let self else { return }
+                self.voiceState = self.dictation.wireState
+                self.lastError = self.dictation.session.error
+            }
             timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
                 Task { @MainActor [weak self] in self?.drainRequests() }
             }
@@ -82,15 +90,14 @@ final class DesktopVoiceController: ObservableObject {
 
     var statusTitle: String {
         if let lastError { return "Voice control: \(lastError)" }
-        if voiceState == "listening" { return "Voice microphone live" }
-        if voiceState == "muted" { return "Voice microphone muted" }
-        return capabilities.desktopVoiceHotkey ? "Desktop Voice ready" : "Desktop Voice needs setup"
+        return dictation.status
     }
 
     private var capabilities: DesktopCapabilities {
         DesktopCapabilities(
             desktopFocus: Self.codexURL != nil && Self.deepLinkTemplateIsValid,
-            desktopVoiceHotkey: AXIsProcessTrusted() && Self.configuredShortcut != nil,
+            // Legacy wire name retained for compatibility with the flashed firmware.
+            desktopVoiceHotkey: dictation.ready,
             powerButtonLongPress: true
         )
     }
@@ -100,6 +107,17 @@ final class DesktopVoiceController: ObservableObject {
             threadId: currentThreadId,
             focusConfidence: currentThreadId == nil ? "unavailable" : focusConfidence,
             voiceState: voiceState,
+            capabilities: capabilities
+        )
+    }
+
+    private var observedStatePayload: DesktopStatePayload {
+        let selection = focusedTask.selection
+        return DesktopStatePayload(
+            threadId: selection.threadId,
+            focusConfidence: selection.status == .confirmed ? "confirmed" : "unavailable",
+            voiceState: selection.threadId != nil && selection.threadId == dictation.session.threadId
+                ? dictation.wireState : "unknown",
             capabilities: capabilities
         )
     }
@@ -127,8 +145,10 @@ final class DesktopVoiceController: ObservableObject {
     }
 
     private func processRequest(at url: URL) {
-        defer { try? fileManager.removeItem(at: url) }
-        guard let data = try? Data(contentsOf: url),
+
+        let requestData = try? Data(contentsOf: url)
+        try? fileManager.removeItem(at: url)
+        guard let data = requestData,
               data.count <= 4096,
               let request = try? JSONDecoder().decode(DesktopIPCRequest.self, from: data),
               request.version == 1,
@@ -140,20 +160,31 @@ final class DesktopVoiceController: ObservableObject {
         let response: DesktopIPCResponse
         switch request.operation {
         case "state":
-            response = success(request.ipcId)
+            response = success(request.ipcId, observed: true)
         case "focus":
-            response = focus(request)
+            Task {
+                let response = await focus(request)
+                writeResponse(response, ipcId: request.ipcId)
+            }
+            return
         case "voice":
-            response = voice(request)
+            Task {
+                let response = await voice(request)
+                writeResponse(response, ipcId: request.ipcId)
+            }
+            return
         default:
             response = failure(request.ipcId, "invalid_request", "Unknown Desktop operation.", 400)
         }
         writeResponse(response, ipcId: request.ipcId)
     }
 
-    private func focus(_ request: DesktopIPCRequest) -> DesktopIPCResponse {
+    private func focus(_ request: DesktopIPCRequest) async -> DesktopIPCResponse {
         guard let threadId = request.threadId, Self.validThreadId(threadId) else {
             return failure(request.ipcId, "invalid_request", "Invalid thread ID.", 400)
+        }
+        guard !dictation.session.isBusy || dictation.session.threadId == threadId else {
+            return failure(request.ipcId, "dictation_busy", "Finish dictation before switching tasks.", 409)
         }
         guard Self.codexURL != nil else {
             return failure(request.ipcId, "codex_not_installed", "Codex Desktop is not installed.", 503)
@@ -162,10 +193,12 @@ final class DesktopVoiceController: ObservableObject {
             ?? "codex://threads/{threadId}"
         let encoded = threadId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? threadId
         guard template.contains("{threadId}"),
-              let url = URL(string: template.replacingOccurrences(of: "{threadId}", with: encoded)),
-              NSWorkspace.shared.open(url) else {
+              let url = URL(string: template.replacingOccurrences(of: "{threadId}", with: encoded)) else {
             return failure(request.ipcId, "desktop_focus_failed", "The configured task deep link could not be opened.", 503)
         }
+
+        do { try await CodexAppLink.open(url) }
+        catch { return failure(request.ipcId, "desktop_focus_failed", error.localizedDescription, 503) }
 
         if currentThreadId != threadId {
             voiceState = "muted"
@@ -178,55 +211,33 @@ final class DesktopVoiceController: ObservableObject {
         return success(request.ipcId)
     }
 
-    private func voice(_ request: DesktopIPCRequest) -> DesktopIPCResponse {
+    private func voice(_ request: DesktopIPCRequest) async -> DesktopIPCResponse {
         guard let threadId = request.threadId,
-              Self.validThreadId(threadId),
-              threadId == currentThreadId else {
-            return failure(request.ipcId, "desktop_thread_not_focused", "Focus this task before controlling Voice.", 409)
+              Self.validThreadId(threadId), threadId == currentThreadId else {
+            return failure(request.ipcId, "desktop_thread_not_focused", "Focus this task before dictating.", 409)
         }
-        if request.command == "mute" {
-            voiceState = "muted"
+        do {
+            switch request.command {
+            case "mute": try dictation.finish(threadId: threadId)
+            case "start-or-resume": try await dictation.start(threadId: threadId)
+            default: return failure(request.ipcId, "invalid_request", "Unknown dictation command.", 400)
+            }
+            voiceState = dictation.wireState
             lastError = nil
             return success(request.ipcId)
+        } catch {
+            return failure(request.ipcId, "dictation_failed", error.localizedDescription, 503)
         }
-        guard request.command == "start-or-resume" else {
-            return failure(request.ipcId, "invalid_request", "Unknown Voice command.", 400)
-        }
-        guard AXIsProcessTrusted() else {
-            return failure(request.ipcId, "accessibility_permission_required", "Grant Accessibility permission to send the Voice shortcut.", 503)
-        }
-        guard let shortcut = Self.configuredShortcut else {
-            return failure(request.ipcId, "voice_hotkey_not_configured", "Configure the same Voice hotkey in Codex and this companion.", 503)
-        }
-        guard post(shortcut) else {
-            return failure(request.ipcId, "voice_hotkey_failed", "The Voice hotkey could not be sent.", 503)
-        }
-        voiceState = "listening"
-        lastError = nil
-        return success(request.ipcId)
     }
 
-    private func post(_ shortcut: VoiceShortcut) -> Bool {
-        guard let source = CGEventSource(stateID: .hidSystemState),
-              let down = CGEvent(keyboardEventSource: source, virtualKey: shortcut.keyCode, keyDown: true),
-              let up = CGEvent(keyboardEventSource: source, virtualKey: shortcut.keyCode, keyDown: false) else {
-            return false
-        }
-        down.flags = shortcut.flags
-        up.flags = shortcut.flags
-        down.post(tap: .cghidEventTap)
-        up.post(tap: .cghidEventTap)
-        return true
-    }
-
-    private func success(_ ipcId: String) -> DesktopIPCResponse {
+    private func success(_ ipcId: String, observed: Bool = false) -> DesktopIPCResponse {
         DesktopIPCResponse(
             ipcId: ipcId,
             ok: true,
             error: nil,
             message: nil,
             statusCode: nil,
-            state: statePayload
+            state: observed ? observedStatePayload : statePayload
         )
     }
 
@@ -272,7 +283,7 @@ final class DesktopVoiceController: ObservableObject {
     }
 
     static var codexURL: URL? {
-        NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex")
+        CodexAppLink.applicationURL
     }
 
     static func validThreadId(_ value: String) -> Bool {

@@ -2,6 +2,14 @@
 
 #include <string.h>
 
+static void copy_thread_id(char *destination, const char *source, size_t size)
+{
+    size_t length = strlen(source);
+    if (length >= size) length = size - 1;
+    memmove(destination, source, length);
+    destination[length] = '\0';
+}
+
 void voice_control_init(voice_control_t *control)
 {
     if (control == NULL) return;
@@ -22,7 +30,7 @@ voice_control_action_t voice_control_begin_toggle(voice_control_t *control, cons
         return VOICE_CONTROL_ACTION_MUTE;
     }
 
-    strlcpy(control->thread_id, thread_id, sizeof(control->thread_id));
+    copy_thread_id(control->thread_id, thread_id, sizeof(control->thread_id));
     control->state = ATTENTION_VOICE_FOCUSING;
     return VOICE_CONTROL_ACTION_FOCUS;
 }
@@ -62,7 +70,28 @@ void voice_control_reconcile(
 {
     if (control == NULL) return;
     if (thread_id != NULL && thread_id[0] != '\0') {
-        strlcpy(control->thread_id, thread_id, sizeof(control->thread_id));
+        copy_thread_id(control->thread_id, thread_id, sizeof(control->thread_id));
     }
     control->state = state;
+}
+
+bool voice_control_stop_from_remote(voice_control_t *control, uint64_t poll_started_at_us,
+    bool remote_available, const char *remote_thread_id, attention_voice_state_t remote_state)
+{
+    if (control == NULL || control->state != ATTENTION_VOICE_LISTENING
+        || poll_started_at_us <= control->recording_started_at_us) return false;
+    if (remote_available && remote_thread_id != NULL
+        && strcmp(control->thread_id, remote_thread_id) == 0
+        && remote_state == ATTENTION_VOICE_LISTENING) return false;
+    control->state = ATTENTION_VOICE_MUTED;
+    return true;
+}
+
+bool voice_control_expire(voice_control_t *control, uint64_t now_us)
+{
+    if (control == NULL || control->state != ATTENTION_VOICE_LISTENING
+        || now_us < control->recording_started_at_us
+        || now_us - control->recording_started_at_us < 60000000ULL) return false;
+    control->state = ATTENTION_VOICE_MUTED;
+    return true;
 }

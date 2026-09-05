@@ -21,6 +21,7 @@
 #include "usb_microphone.h"
 #include "voice_audio.h"
 #include "voice_control.h"
+#include "esp_timer.h"
 
 static const char *TAG = "codex_display";
 
@@ -159,7 +160,15 @@ static void poll_task(void *argument)
             continue;
         }
 
+        const uint64_t poll_started_at_us = (uint64_t)esp_timer_get_time();
         esp_err_t result = attention_client_fetch(&fetched);
+        taskENTER_CRITICAL(&s_voice_control_lock);
+        const bool stopped = voice_control_stop_from_remote(&s_voice_control, poll_started_at_us,
+            result == ESP_OK && fetched.current_thread.available,
+            result == ESP_OK ? fetched.current_thread.id : NULL,
+            result == ESP_OK ? fetched.current_thread.voice_state : ATTENTION_VOICE_UNKNOWN);
+        if (stopped) voice_audio_set_listening(false);
+        taskEXIT_CRITICAL(&s_voice_control_lock);
         if (result == ESP_OK) {
             if (has_previous_success && snapshot_should_chime(&previous_success, &fetched)) {
                 attention_audio_notify();
@@ -297,9 +306,10 @@ static void voice_task(void *argument)
             && strcmp(s_voice_control.thread_id, request.thread_id) == 0;
         if (still_requested) {
             voice_control_voice_result(&s_voice_control, acknowledged, acknowledged);
+            if (acknowledged) s_voice_control.recording_started_at_us = (uint64_t)esp_timer_get_time();
         }
-        taskEXIT_CRITICAL(&s_voice_control_lock);
         voice_audio_set_listening(acknowledged && still_requested);
+        taskEXIT_CRITICAL(&s_voice_control_lock);
         set_voice_ui(
             request.thread_id,
             still_requested
@@ -315,6 +325,14 @@ static void button_task(void *argument)
     button_input_event_t event;
 
     while (true) {
+        char expired_thread[ATTENTION_ID_MAX] = { 0 };
+        taskENTER_CRITICAL(&s_voice_control_lock);
+        if (voice_control_expire(&s_voice_control, (uint64_t)esp_timer_get_time())) {
+            voice_audio_set_listening(false);
+            strlcpy(expired_thread, s_voice_control.thread_id, sizeof(expired_thread));
+        }
+        taskEXIT_CRITICAL(&s_voice_control_lock);
+        if (expired_thread[0] != '\0') set_voice_ui(expired_thread, ATTENTION_VOICE_MUTED);
         if (!button_input_poll(&event)) {
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;
@@ -349,6 +367,7 @@ static void button_task(void *argument)
                     &s_voice_control,
                     thread_id
                 );
+                voice_audio_set_listening(false);
                 taskEXIT_CRITICAL(&s_voice_control_lock);
                 if (action == VOICE_CONTROL_ACTION_MUTE) {
                     attention_ui_set_voice_state(thread_id, ATTENTION_VOICE_MUTED);

@@ -8,6 +8,7 @@ final class CodexESP32DisplayAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItemController = StatusItemController(bridge: bridge)
+        if !DictationRecorder.permissionReady { bridge.openVoiceSettings() }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -22,7 +23,9 @@ struct CodexESP32DisplayApp: App {
 
     var body: some Scene {
         Settings {
-            VoiceSettingsView()
+            if let dictation = BridgeController.active?.desktopVoiceController.dictation {
+                VoiceSettingsView(dictation: dictation)
+            }
         }
     }
 }

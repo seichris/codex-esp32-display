@@ -17,7 +17,8 @@ when several reasons apply.
 - **BOOT short press:** highlight the next thread, wrapping at the end.
 - **PWR short press:** open the highlighted thread's latest text.
 - **Either button, held for one second:** focus the selected/detail thread and
-  start Desktop Voice; hold again to mute, and again to resume.
+  start device dictation; hold again to finish transcription. Review the text
+  in the Mac companion and choose **Open as Task Draft** before sending it.
 - **PWR on the text screen:** return to the inbox.
 - **BOOT on the text screen:** jump to the next thread and load its latest text.
 - **Touch:** scroll the inbox or text screen; tap a thread card to open it;
@@ -62,7 +63,8 @@ The bridge has no runtime npm dependencies.
 - plays a short two-tone chime once when a new attention item or attention reason
   appears; audio initialization failure leaves the rest of the device usable.
 - enumerates as a 48 kHz mono USB microphone and sends silence unless the local
-  Voice state is explicitly listening.
+  Voice state is explicitly listening; stops on a fresh non-listening companion
+  snapshot and enforces a 60-second limit.
 
 ## Architecture
 
@@ -203,8 +205,8 @@ open "macos/build/Codex ESP32 Display.app"
 
 It replaces the bridge LaunchAgent while running and provides bridge status,
 start/stop, the dashboard, endpoint copying, Voice status/settings, and log
-access from its menu. Accessibility permission is required to inject the Voice
-shortcut.
+access from its menu. Microphone and Speech Recognition permissions are required for native
+dictation. Audio is transcribed locally and is never saved.
 
 ## Attention rules
 

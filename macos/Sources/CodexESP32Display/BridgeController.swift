@@ -71,7 +71,7 @@ final class BridgeController: ObservableObject {
     private var process: Process?
     private var logHandle: FileHandle?
     private var healthTimer: Timer?
-    private lazy var voiceSettingsWindow = VoiceSettingsWindowController()
+    private lazy var voiceSettingsWindow = VoiceSettingsWindowController(dictation: desktopVoiceController.dictation)
 
     init() {
         _ = FileManager.default.changeCurrentDirectoryPath("/tmp")

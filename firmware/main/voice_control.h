@@ -12,6 +12,7 @@ typedef enum {
 
 typedef struct {
     attention_voice_state_t state;
+    uint64_t recording_started_at_us;
     char thread_id[ATTENTION_ID_MAX];
 } voice_control_t;
 
@@ -28,3 +29,8 @@ void voice_control_reconcile(
     const char *thread_id,
     attention_voice_state_t state
 );
+
+// Only a poll begun after the recording acknowledgement may stop that recording.
+bool voice_control_stop_from_remote(voice_control_t *control, uint64_t poll_started_at_us,
+    bool remote_available, const char *remote_thread_id, attention_voice_state_t remote_state);
+bool voice_control_expire(voice_control_t *control, uint64_t now_us);
