@@ -48,7 +48,6 @@ final class DesktopVoiceController: ObservableObject {
     @Published private(set) var lastError: String?
 
     let dictation = DictationModel()
-    let focusedTask = FocusedTaskObserver()
 
     private let fileManager = FileManager.default
     private let root: URL
@@ -111,17 +110,6 @@ final class DesktopVoiceController: ObservableObject {
         )
     }
 
-    private var observedStatePayload: DesktopStatePayload {
-        let selection = focusedTask.selection
-        return DesktopStatePayload(
-            threadId: selection.threadId,
-            focusConfidence: selection.status == .confirmed ? "confirmed" : "unavailable",
-            voiceState: selection.threadId != nil && selection.threadId == dictation.session.threadId
-                ? dictation.wireState : "unknown",
-            capabilities: capabilities
-        )
-    }
-
     private func prepareDirectories() throws {
         try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: root.appendingPathComponent("requests"), withIntermediateDirectories: true)
@@ -160,7 +148,7 @@ final class DesktopVoiceController: ObservableObject {
         let response: DesktopIPCResponse
         switch request.operation {
         case "state":
-            response = success(request.ipcId, observed: true)
+            response = success(request.ipcId)
         case "focus":
             Task {
                 let response = await focus(request)
@@ -230,14 +218,14 @@ final class DesktopVoiceController: ObservableObject {
         }
     }
 
-    private func success(_ ipcId: String, observed: Bool = false) -> DesktopIPCResponse {
+    private func success(_ ipcId: String) -> DesktopIPCResponse {
         DesktopIPCResponse(
             ipcId: ipcId,
             ok: true,
             error: nil,
             message: nil,
             statusCode: nil,
-            state: observed ? observedStatePayload : statePayload
+            state: statePayload
         )
     }
 
