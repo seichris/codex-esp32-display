@@ -10,7 +10,7 @@ struct VoiceSettingsView: View {
     var body: some View {
         Form {
             Section("Device dictation") {
-                Text("Long press to record from the Waveshare USB microphone. Long press again to finish and open the text in the recorded task's composer. Existing composer text is replaced; no message is sent.")
+                Text("Long press any button to record. Long press again to end recording and paste text into Codex.")
                 Text("English transcription runs on this Mac. Audio is not saved or sent to a transcription service.")
                     .font(.caption).foregroundStyle(.secondary)
                 TextField("Task deep link", text: $deepLink)
@@ -25,9 +25,6 @@ struct VoiceSettingsView: View {
                     Task { await dictation.requestPermissions(); requesting = false }
                 }.disabled(requesting)
                 Button("Open Dictation") { dictation.showWindow() }
-            }
-            if let observer = BridgeController.active?.desktopVoiceController.focusedTask {
-                FocusedTaskStatusView(observer: observer)
             }
         }
         .formStyle(.grouped).padding().frame(width: 550, height: 560)
