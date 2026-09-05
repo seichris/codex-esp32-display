@@ -10,10 +10,19 @@ final class DictationModel: ObservableObject {
     @Published var draftText = ""
     @Published private(set) var level: Float = 0
     @Published private(set) var handoffMessage: String?
+    @Published private(set) var isOpeningDraft = false
     @Published private(set) var permissionRevision = 0
     var onStateChange: (() -> Void)?
     private let recorder = DictationRecorder()
     private var window: NSWindow?
+    private let openDraftLink: @MainActor (URL) async throws -> Void
+
+    init(session: DictationSession = DictationSession(),
+         openDraftLink: @escaping @MainActor (URL) async throws -> Void = CodexAppLink.open) {
+        self.session = session
+        self.draftText = session.text
+        self.openDraftLink = openDraftLink
+    }
 
     var ready: Bool { DictationRecorder.permissionReady && DictationRecorder.device != nil && DictationRecorder.onDeviceAvailable }
     var wireState: String {
@@ -76,7 +85,7 @@ final class DictationModel: ObservableObject {
         }
     }
 
-    private func handle(id: UUID, event: DictationRecorder.Event) {
+    func handle(id: UUID, event: DictationRecorder.Event) {
         guard session.id == id else { return }
         let previousPhase = session.phase
         switch event {
@@ -90,7 +99,13 @@ final class DictationModel: ObservableObject {
                 DictationDiagnostics.record("empty-final-kept-partial")
             }
             draftText = session.text
-            if final { level = 0; showWindow() }
+            if final {
+                level = 0
+                // update rejects terminal callbacks, so only the first completed
+                // transcript opens the original task's composer.
+                if session.phase == .draft { openDraft() }
+                else { showWindow() }
+            }
         case let .failed(message): session.fail(id, message); level = 0; showWindow()
         case let .level(value): level = value
         }
@@ -99,7 +114,7 @@ final class DictationModel: ObservableObject {
     }
 
     func discard() {
-        guard !session.isBusy else { return }
+        guard !session.isBusy, !isOpeningDraft else { return }
         recorder.cancel()
         session.discard()
         draftText = ""
@@ -109,20 +124,27 @@ final class DictationModel: ObservableObject {
     }
 
     func openDraft() {
+        guard !isOpeningDraft else { return }
         guard !session.isBusy, let threadId = session.threadId,
               let url = DictationDraftLink.url(threadId: threadId, text: draftText) else {
             handoffMessage = "The draft is empty or too long. Use Copy Text to keep it."
             return
         }
+        let sessionId = session.id
+        isOpeningDraft = true
         handoffMessage = "Opening the recorded task's draft…"
         Task {
+            defer { isOpeningDraft = false }
             do {
-                try await CodexAppLink.open(url)
+                try await openDraftLink(url)
+                guard session.id == sessionId else { return }
                 handoffMessage = "Draft link opened for the recorded task. Check the text in Codex before sending. This copy is kept until you discard it."
                 DictationDiagnostics.record("draft-link-accepted")
             } catch {
+                guard session.id == sessionId else { return }
                 handoffMessage = "Codex could not open the draft. Your text is still here."
                 DictationDiagnostics.record("draft-link-failed")
+                showWindow()
             }
         }
     }
@@ -163,14 +185,14 @@ private struct DictationReviewView: View {
                 .disabled(model.session.isBusy).accessibilityLabel("Dictation text")
             if let error = model.session.error { Text(error).foregroundStyle(.red) }
             if let message = model.handoffMessage { Text(message).font(.caption) }
-            Text("Open as Task Draft replaces any existing text in that task's composer. It does not send a message.")
+            Text("Completed dictation opens automatically in the recorded task's composer, replacing existing text. It never sends a message. This copy stays here until you discard it.")
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
-                Button("Discard") { model.discard() }.disabled(model.session.isBusy)
+                Button("Discard") { model.discard() }.disabled(model.session.isBusy || model.isOpeningDraft)
                 Spacer()
                 Button("Copy Text") { model.copyText() }.disabled(model.draftText.isEmpty)
                 Button("Open as Task Draft") { model.openDraft() }
-                    .disabled(model.session.isBusy || model.draftText.isEmpty)
+                    .disabled(model.session.isBusy || model.draftText.isEmpty || model.isOpeningDraft)
             }
         }
         .padding(20).frame(minWidth: 560, minHeight: 390)

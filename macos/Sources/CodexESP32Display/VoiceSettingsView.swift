@@ -10,7 +10,7 @@ struct VoiceSettingsView: View {
     var body: some View {
         Form {
             Section("Device dictation") {
-                Text("Long press to record from the Waveshare USB microphone. Long press again to finish and review the text.")
+                Text("Long press to record from the Waveshare USB microphone. Long press again to finish and open the text in the recorded task's composer. Existing composer text is replaced; no message is sent.")
                 Text("English transcription runs on this Mac. Audio is not saved or sent to a transcription service.")
                     .font(.caption).foregroundStyle(.secondary)
                 TextField("Task deep link", text: $deepLink)

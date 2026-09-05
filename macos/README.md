@@ -30,10 +30,12 @@ system default microphone.
    from an active capture session, not merely a posted keyboard shortcut.
 3. Speak, then hold again. This closes the device PCM gate and calls
    `endAudio()` on the local speech request so transcription can finish.
-4. Review the text in **Device Dictation**. **Open as Task Draft** uses the
-   recorded task ID and a percent-encoded `prompt` query in its Codex deep link.
+4. Completed dictation automatically opens in the recorded task's composer,
+   using its task ID and a percent-encoded `prompt` query in a Codex deep link.
    This replaces any existing composer text; it never sends a message.
    The companion keeps its copy until **Discard**, with **Copy Text** as a fallback.
+   **Open as Task Draft** can retry the handoff or reopen an edited copy. Failed
+   recognition stays in Device Dictation for review rather than opening automatically.
 
 The exact target is pinned for a recording. Switching targets while recording,
 overwriting a pending draft, and late callbacks from previous recordings are
