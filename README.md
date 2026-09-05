@@ -16,14 +16,18 @@ when several reasons apply.
 
 - **BOOT short press:** highlight the next thread, wrapping at the end.
 - **PWR short press:** open the highlighted thread's latest text.
+- **Either button, held for one second:** focus the selected/detail thread and
+  start device dictation; hold again to finish transcription. Review the text
+  in the Mac companion and choose **Open as Task Draft** before sending it.
 - **PWR on the text screen:** return to the inbox.
 - **BOOT on the text screen:** jump to the next thread and load its latest text.
 - **Touch:** scroll the inbox or text screen; tap a thread card to open it;
-  tap the gear to adjust title and subtitle sizes, then use the back arrow to
-  return to the inbox.
+  tap the fixed bottom Voice Target card once to select/focus it and again to
+  open its details; tap the gear to adjust title and subtitle sizes, then use
+  the back arrow to return to the inbox.
 
-The firmware only observes the AXP2101 short-press status. It does not change the
-board's long-hold hardware shutdown behavior.
+The firmware observes the AXP2101 one-second long-press interrupt without
+changing its separate four-to-ten-second hardware shutdown threshold.
 
 ## What is implemented
 
@@ -35,6 +39,8 @@ board's long-hold hardware shutdown behavior.
 - observes `turn/completed` and status notifications;
 - exposes a bearer-token-protected attention-list endpoint;
 - exposes an on-demand latest-text endpoint for threads currently in the inbox;
+- exposes authenticated Desktop state/focus/Voice endpoints backed by a private
+  per-launch channel to the native companion;
 - includes a browser dashboard with the same list/detail interaction;
 - reconnects when App Server exits and preserves the last good list.
 
@@ -45,14 +51,20 @@ The bridge has no runtime npm dependencies.
 - targets the Waveshare ESP32-S3-Touch-AMOLED-2.06 only;
 - uses Waveshare's managed BSP and LVGL 9.5;
 - renders a touch-scrollable 410×502 inbox;
+- redraws complete screens through reserved DMA strips, with checked transfers
+  and retries so failed updates are not silently accepted;
+- renders a fixed bottom card for the current or targeted Desktop Voice thread;
 - preserves the selected thread across list refreshes;
-- reads BOOT on GPIO0 and the PWR short-press latch from the AXP2101 over the
+- reads BOOT on GPIO0 and the PWR short/long-press latches from the AXP2101 over the
   BSP's shared I²C bus;
 - fetches long thread text in a separate FreeRTOS task, so the UI remains usable;
 - discards stale detail responses after the user changes threads;
 - keeps the last good list when Wi-Fi or the bridge temporarily fails.
 - plays a short two-tone chime once when a new attention item or attention reason
   appears; audio initialization failure leaves the rest of the device usable.
+- enumerates as a 48 kHz mono USB microphone and sends silence unless the local
+  Voice state is explicitly listening; stops on a fresh non-listening companion
+  snapshot and enforces a 60-second limit.
 
 ## Architecture
 
@@ -63,15 +75,20 @@ Codex Desktop state                 codex app-server
           └──────────────┬─────────────────┘
                          ▼
                  Mac bridge :5180
-        /api/v1/attention    /api/v1/threads/:id/latest
+      attention/detail + authenticated Desktop control endpoints
+                         │ private per-launch IPC
+                         ▼
+              native menu-bar companion
+            thread deep link + Voice hotkey
                          │ Bearer token / LAN
                          ▼
          Waveshare ESP32-S3-Touch-AMOLED-2.06
-        touch + BOOT/PWR list selection and detail view
+   touch + BOOT/PWR + fail-closed USB microphone stream
 ```
 
-The bridge never edits Codex state. Opening text on the ESP32 does **not** mark a
-thread read in Codex Desktop.
+The bridge never edits Codex thread data. Opening text on the ESP32 does **not**
+mark a thread read in Codex Desktop. A focus request may navigate Codex
+Desktop, and the Voice request invokes its configured keyboard shortcut.
 
 ## 1. Start the Mac bridge
 
@@ -187,7 +204,11 @@ open "macos/build/Codex ESP32 Display.app"
 ```
 
 It replaces the bridge LaunchAgent while running and provides bridge status,
-start/stop, the dashboard, endpoint copying, and log access from its menu.
+start/stop, the dashboard, endpoint copying, Voice status/settings, and log
+access from its menu. Opening the dashboard from the menu automatically seeds
+its token and clears the URL fragment after the dashboard stores it locally.
+Microphone and Speech Recognition permissions are required for native dictation.
+Audio is transcribed locally and is never saved.
 
 ## Attention rules
 
@@ -236,6 +257,14 @@ curl -H "Authorization: Bearer <token>" \
   http://127.0.0.1:5180/api/v1/threads/<thread-id>/latest
 ```
 
+Desktop state and commands use the same bearer token:
+
+```text
+GET  /api/v1/desktop/state
+POST /api/v1/desktop/focus
+POST /api/v1/desktop/voice
+```
+
 The latest-text response prefers the newest Codex agent message, then a plan,
 then a user message, then the thread preview. Text is capped at 5,600 UTF-8 bytes
 for predictable ESP32 memory use.
@@ -247,6 +276,8 @@ See [docs/protocol.md](docs/protocol.md) and
 
 - HTTP plus a bearer token prevents accidental access; it does not encrypt LAN
   traffic. Use a trusted/private network.
+- The bridge-to-companion controller uses a random token and a private
+  per-launch temporary directory. Voice commands are idempotent by request ID.
 - Unread state comes from Codex Desktop's internal
   `.codex-global-state.json`. Parsing is read-only and failure-tolerant, but the
   format can change.
@@ -254,9 +285,11 @@ See [docs/protocol.md](docs/protocol.md) and
   App Server APIs. For latest text, the bridge falls back from paginated turns
   to `thread/read` and then to the authenticated thread's local rollout file
   when an older App Server exposes metadata but not transcript APIs.
-- The PWR input path is implemented against the AXP2101 short-press status latch;
-  physical-button behavior should still be verified on the exact board revision
-  before treating it as production hardware.
+- The PWR input path is implemented against the AXP2101 short/long-press status
+  latches; its one-second long-press behavior, USB microphone enumeration/audio,
+  the Codex Desktop thread deep link, and Voice shortcut behavior must still be
+  verified on the exact hardware and installed Desktop build before treating the
+  feature as production-ready.
 
 ## Development
 

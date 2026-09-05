@@ -12,12 +12,17 @@ static lv_obj_t *s_settings_view;
 static lv_obj_t *s_count_label;
 static lv_obj_t *s_status_dot;
 static lv_obj_t *s_list;
+static lv_obj_t *s_current_card;
+static lv_obj_t *s_current_title;
+static lv_obj_t *s_current_meta;
+static lv_obj_t *s_current_voice;
 static lv_obj_t *s_cards[CONFIG_CODEX_ATTENTION_MAX_ITEMS];
 static lv_obj_t *s_card_titles[CONFIG_CODEX_ATTENTION_MAX_ITEMS];
 static lv_obj_t *s_detail_title;
 static lv_obj_t *s_detail_meta;
 static lv_obj_t *s_detail_text;
 static lv_obj_t *s_detail_body;
+static lv_obj_t *s_detail_voice;
 static lv_obj_t *s_settings_title_example;
 static lv_obj_t *s_settings_subtitle_example;
 static lv_obj_t *s_settings_title_size;
@@ -28,9 +33,12 @@ static lv_obj_t *s_settings_subtitle_up;
 static lv_obj_t *s_settings_subtitle_down;
 static attention_snapshot_t s_snapshot;
 static uint32_t s_selected_index;
+static bool s_selected_is_current;
+static bool s_current_armed;
 static char s_selected_id[ATTENTION_ID_MAX];
 static char s_detail_id[ATTENTION_ID_MAX];
 static attention_ui_open_callback_t s_open_callback;
+static attention_ui_focus_callback_t s_focus_callback;
 static void *s_open_context;
 
 static const lv_color_t COLOR_BG = LV_COLOR_MAKE(8, 10, 14);
@@ -47,9 +55,19 @@ static const lv_color_t COLOR_RED = LV_COLOR_MAKE(255, 139, 151);
 #define LIST_HEADER_TITLE_INSET 60
 #define LIST_HEADER_EDGE_INSET 10
 #define SETTINGS_BUTTON_SIZE 42
+#define STATUS_ICON_SIZE 24
+#define STATUS_ICON_FONT (&lv_font_montserrat_24)
 #define LIST_HEADER_SETTINGS_INSET (LIST_HEADER_EDGE_INSET + SETTINGS_BUTTON_SIZE)
 #define DETAIL_TEXT_TOP_INSET 4
 #define DETAIL_BOTTOM_MARGIN 10
+#define CURRENT_CARD_HEIGHT 80
+#define CURRENT_CARD_WIDTH 390
+#define CURRENT_CARD_BORDER 2
+#define CURRENT_CARD_PADDING 10
+#define CURRENT_CARD_LEFT_PADDING (LIST_HEADER_TITLE_INSET - LIST_HEADER_EDGE_INSET - CURRENT_CARD_BORDER)
+#define CURRENT_CARD_TITLE_WIDTH (CURRENT_CARD_WIDTH - CURRENT_CARD_BORDER * 2 - CURRENT_CARD_LEFT_PADDING - CURRENT_CARD_PADDING - STATUS_ICON_SIZE - 8)
+#define CURRENT_CARD_BOTTOM 8
+#define LIST_VIEW_GAP 6
 #define SETTINGS_NVS_NAMESPACE "attention_ui"
 #define SETTINGS_NVS_TITLE_KEY "title_font"
 #define SETTINGS_NVS_SUBTITLE_KEY "subtitle_font"
@@ -96,6 +114,8 @@ enum {
 
 static void update_settings_controls(void);
 static void position_detail_body(void);
+static void update_current_card(void);
+static void update_detail_voice(void);
 
 static void set_common_text(lv_obj_t *label, const lv_font_t *font, lv_color_t color)
 {
@@ -186,6 +206,7 @@ static void apply_font_settings(void)
         if (s_card_titles[index] != NULL) set_common_text(s_card_titles[index], title->font, COLOR_TEXT);
     }
     if (s_detail_title != NULL) set_common_text(s_detail_title, title->font, COLOR_TEXT);
+    if (s_current_title != NULL) set_common_text(s_current_title, &lv_font_montserrat_20, COLOR_TEXT);
     if (s_detail_meta != NULL) set_common_text(s_detail_meta, &lv_font_montserrat_16, COLOR_MUTED);
     if (s_settings_title_example != NULL) {
         set_common_text(s_settings_title_example, title->font, COLOR_TEXT);
@@ -198,7 +219,9 @@ static void make_root(lv_obj_t *root)
 {
     lv_obj_remove_flag(root, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_size(root, lv_pct(100), lv_pct(100));
-    lv_obj_set_style_bg_opa(root, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_radius(root, 0, 0);
+    lv_obj_set_style_bg_color(root, COLOR_BG, 0);
+    lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(root, 0, 0);
     lv_obj_set_style_pad_all(root, 0, 0);
 }
@@ -273,16 +296,101 @@ static int32_t find_item(const char *thread_id)
     return -1;
 }
 
+static lv_color_t voice_state_color(attention_voice_state_t state)
+{
+    if (state == ATTENTION_VOICE_LISTENING) return COLOR_GREEN;
+    if (state == ATTENTION_VOICE_ERROR) return COLOR_RED;
+    if (state == ATTENTION_VOICE_FOCUSING || state == ATTENTION_VOICE_STARTING) return COLOR_AMBER;
+    return COLOR_MUTED;
+}
+
+// Draw the microphone directly so it does not depend on an optional font glyph.
+static void draw_microphone(lv_event_t *event)
+{
+    lv_obj_t *icon = lv_event_get_target_obj(event);
+    lv_layer_t *layer = lv_event_get_layer(event);
+    lv_area_t bounds;
+    lv_obj_get_coords(icon, &bounds);
+    const lv_color_t color = lv_obj_get_style_text_color(icon, 0);
+    const int32_t x = bounds.x1;
+    const int32_t y = bounds.y1;
+
+    lv_draw_rect_dsc_t capsule;
+    lv_draw_rect_dsc_init(&capsule);
+    capsule.bg_opa = LV_OPA_TRANSP;
+    capsule.border_color = color;
+    capsule.border_width = 2;
+    capsule.radius = 5;
+    const lv_area_t body = {x + 7, y + 1, x + 16, y + 14};
+    lv_draw_rect(layer, &capsule, &body);
+
+    lv_draw_arc_dsc_t cradle;
+    lv_draw_arc_dsc_init(&cradle);
+    cradle.color = color;
+    cradle.width = 2;
+    cradle.center = (lv_point_t){x + 12, y + 11};
+    cradle.radius = 10;
+    cradle.start_angle = 0;
+    cradle.end_angle = 180;
+    lv_draw_arc(layer, &cradle);
+
+    lv_draw_line_dsc_t line;
+    lv_draw_line_dsc_init(&line);
+    line.color = color;
+    line.width = 2;
+    const int32_t segments[][4] = {{3, 8, 3, 11}, {21, 8, 21, 11},
+                                  {12, 20, 12, 23}, {7, 23, 17, 23}};
+    for (unsigned i = 0; i < sizeof(segments) / sizeof(segments[0]); ++i) {
+        line.p1 = (lv_point_precise_t){x + segments[i][0], y + segments[i][1]};
+        line.p2 = (lv_point_precise_t){x + segments[i][2], y + segments[i][3]};
+        lv_draw_line(layer, &line);
+    }
+}
+
+static lv_obj_t *create_microphone(lv_obj_t *parent)
+{
+    lv_obj_t *icon = lv_obj_create(parent);
+    lv_obj_remove_style_all(icon);
+    lv_obj_remove_flag(icon, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_size(icon, STATUS_ICON_SIZE, STATUS_ICON_SIZE);
+    lv_obj_set_style_text_color(icon, COLOR_MUTED, 0);
+    lv_obj_add_event_cb(icon, draw_microphone, LV_EVENT_DRAW_MAIN, NULL);
+    return icon;
+}
+
+static void position_microphone(lv_obj_t *icon, lv_obj_t *title)
+{
+    lv_obj_update_layout(title);
+    lv_obj_align_to(icon, title, LV_ALIGN_OUT_RIGHT_TOP, 8, 0);
+    lv_obj_invalidate(icon);
+}
+
 static void apply_selection(bool scroll)
 {
     for (uint32_t index = 0; index < s_snapshot.count; ++index) {
         lv_obj_t *card = s_cards[index];
         if (card == NULL) continue;
-        const bool selected = index == s_selected_index;
+        const bool selected = !s_selected_is_current && index == s_selected_index;
         if (s_card_titles[index] != NULL) {
             lv_obj_set_style_text_color(
                 s_card_titles[index],
                 selected ? COLOR_GREEN : COLOR_TEXT,
+                0
+            );
+        }
+    }
+
+
+    if (s_current_card != NULL) {
+        lv_obj_set_style_border_color(
+            s_current_card,
+            s_selected_is_current ? COLOR_GREEN : COLOR_BORDER,
+            0
+        );
+        if (s_current_title != NULL) {
+            lv_obj_set_style_text_color(
+                s_current_title,
+                s_selected_is_current ? COLOR_GREEN : COLOR_TEXT,
                 0
             );
         }
@@ -302,8 +410,18 @@ static void select_index(uint32_t index, bool scroll)
         return;
     }
     s_selected_index = index % s_snapshot.count;
+    s_selected_is_current = false;
+    s_current_armed = false;
     strlcpy(s_selected_id, s_snapshot.items[s_selected_index].id, sizeof(s_selected_id));
     apply_selection(scroll);
+}
+
+static void select_current(void)
+{
+    if (!s_snapshot.current_thread.available) return;
+    s_selected_is_current = true;
+    strlcpy(s_selected_id, s_snapshot.current_thread.id, sizeof(s_selected_id));
+    apply_selection(false);
 }
 
 static void card_clicked(lv_event_t *event)
@@ -315,6 +433,91 @@ static void card_clicked(lv_event_t *event)
     if (index >= s_snapshot.count) return;
     select_index(index, false);
     if (s_open_callback != NULL) s_open_callback(s_selected_id, s_open_context);
+}
+
+static void current_card_clicked(lv_event_t *event)
+{
+    if (lv_event_get_code(event) != LV_EVENT_CLICKED || !s_snapshot.current_thread.available) return;
+    if (s_selected_is_current && s_current_armed
+        && strcmp(s_selected_id, s_snapshot.current_thread.id) == 0) {
+        s_current_armed = false;
+        if (s_open_callback != NULL) s_open_callback(s_selected_id, s_open_context);
+        return;
+    }
+
+    select_current();
+    s_current_armed = true;
+    if (s_focus_callback != NULL) s_focus_callback(s_selected_id, s_open_context);
+}
+
+static void create_current_card(void)
+{
+    s_current_card = lv_obj_create(s_list_view);
+    lv_obj_remove_flag(s_current_card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_current_card, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_size(s_current_card, CURRENT_CARD_WIDTH, CURRENT_CARD_HEIGHT);
+    lv_obj_set_flex_grow(s_current_card, 0);
+    lv_obj_set_style_radius(s_current_card, 10, 0);
+    lv_obj_set_style_bg_color(s_current_card, lv_color_make(18, 23, 31), 0);
+    lv_obj_set_style_bg_opa(s_current_card, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_current_card, CURRENT_CARD_BORDER, 0);
+    lv_obj_set_style_border_color(s_current_card, COLOR_BORDER, 0);
+    lv_obj_set_style_pad_all(s_current_card, CURRENT_CARD_PADDING, 0);
+    lv_obj_set_style_pad_left(s_current_card, CURRENT_CARD_LEFT_PADDING, 0);
+    lv_obj_add_event_cb(s_current_card, current_card_clicked, LV_EVENT_CLICKED, NULL);
+
+    s_current_voice = create_microphone(s_current_card);
+
+    s_current_title = lv_label_create(s_current_card);
+    lv_obj_set_width(s_current_title, LV_SIZE_CONTENT);
+    lv_obj_set_style_max_width(s_current_title, CURRENT_CARD_TITLE_WIDTH, 0);
+    lv_label_set_long_mode(s_current_title, LV_LABEL_LONG_DOT);
+    lv_label_set_text(s_current_title, "Connecting to the Mac");
+    set_common_text(s_current_title, &lv_font_montserrat_20, COLOR_TEXT);
+    lv_obj_align(s_current_title, LV_ALIGN_TOP_LEFT, 0, 2);
+
+    s_current_meta = lv_label_create(s_current_card);
+    lv_obj_set_width(s_current_meta, lv_pct(100));
+    lv_label_set_long_mode(s_current_meta, LV_LABEL_LONG_DOT);
+    lv_label_set_text(s_current_meta, "Waiting for bridge status");
+    set_common_text(s_current_meta, &lv_font_montserrat_14, COLOR_MUTED);
+    lv_obj_align(s_current_meta, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+}
+
+static void update_current_card(void)
+{
+    if (s_current_card == NULL) return;
+    const attention_current_thread_t *current = &s_snapshot.current_thread;
+    if (!current->available) {
+        if (s_snapshot.source_error[0] != '\0') {
+            lv_label_set_text(s_current_title, "Bridge data unavailable");
+            lv_label_set_text(s_current_meta, "Check the bridge and Wi-Fi");
+        } else if (s_snapshot.desktop_control_availability == ATTENTION_DESKTOP_CONTROL_UNKNOWN) {
+            lv_label_set_text(s_current_title, "Controller status unknown");
+            lv_label_set_text(s_current_meta, "Check the Mac bridge and companion");
+        } else if (s_snapshot.desktop_control_availability == ATTENTION_DESKTOP_CONTROL_UNAVAILABLE) {
+            lv_label_set_text(s_current_title, "Voice controller unavailable");
+            lv_label_set_text(s_current_meta, "Start the Mac companion");
+        } else {
+            // No target ID is not evidence that no task is open on the Mac.
+            lv_label_set_text(s_current_title, "Mac selection is unknown");
+            lv_label_set_text(s_current_meta, s_snapshot.capabilities.desktop_focus
+                ? "For Voice, hold a button on a list task"
+                : "Desktop focus needs setup on the Mac");
+        }
+        lv_obj_set_style_text_color(s_current_voice, COLOR_MUTED, 0);
+        position_microphone(s_current_voice, s_current_title);
+        lv_obj_add_state(s_current_card, LV_STATE_DISABLED);
+        s_current_armed = false;
+        if (s_selected_is_current) s_selected_is_current = false;
+        return;
+    }
+
+    lv_obj_clear_state(s_current_card, LV_STATE_DISABLED);
+    lv_label_set_text(s_current_title, current->title);
+    lv_label_set_text(s_current_meta, current->project);
+    position_microphone(s_current_voice, s_current_title);
+    lv_obj_set_style_text_color(s_current_voice, voice_state_color(current->voice_state), 0);
 }
 
 static lv_obj_t *create_card(const attention_item_t *item, uint32_t index)
@@ -373,11 +576,17 @@ static void create_list_view(lv_obj_t *screen)
 {
     s_list_view = lv_obj_create(screen);
     make_root(s_list_view);
+    // Budget the viewport between fixed siblings. Only the list grows and
+    // scrolls; its content height must never size the outer screen.
+    lv_obj_set_flex_flow(s_list_view, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(s_list_view, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_row(s_list_view, LIST_VIEW_GAP, 0);
+    lv_obj_set_style_pad_bottom(s_list_view, CURRENT_CARD_BOTTOM, 0);
 
     lv_obj_t *header = lv_obj_create(s_list_view);
     lv_obj_remove_flag(header, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_size(header, lv_pct(100), 54);
-    lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_flex_grow(header, 0);
     lv_obj_set_style_bg_opa(header, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(header, 0, 0);
     lv_obj_set_style_pad_all(header, 0, 0);
@@ -419,7 +628,7 @@ static void create_list_view(lv_obj_t *screen)
         LV_SYMBOL_SETTINGS,
         SETTINGS_BUTTON_SIZE,
         SETTINGS_BUTTON_SIZE,
-        &lv_font_montserrat_24,
+        STATUS_ICON_FONT,
         COLOR_TEXT,
         settings_icon_clicked,
         NULL
@@ -429,7 +638,7 @@ static void create_list_view(lv_obj_t *screen)
     lv_obj_t *divider = lv_obj_create(s_list_view);
     lv_obj_remove_flag(divider, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_size(divider, 390, 1);
-    lv_obj_align(divider, LV_ALIGN_TOP_MID, 0, 54);
+    lv_obj_set_flex_grow(divider, 0);
     lv_obj_set_style_radius(divider, 0, 0);
     lv_obj_set_style_bg_color(divider, COLOR_BORDER, 0);
     lv_obj_set_style_bg_opa(divider, LV_OPA_COVER, 0);
@@ -437,8 +646,9 @@ static void create_list_view(lv_obj_t *screen)
     lv_obj_set_style_pad_all(divider, 0, 0);
 
     s_list = lv_obj_create(s_list_view);
-    lv_obj_set_size(s_list, 390, 428);
-    lv_obj_align(s_list, LV_ALIGN_BOTTOM_MID, 0, -9);
+    lv_obj_set_size(s_list, 390, 0);
+    lv_obj_set_style_min_height(s_list, 0, 0);
+    lv_obj_set_flex_grow(s_list, 1);
     lv_obj_set_style_bg_opa(s_list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_list, 0, 0);
     lv_obj_set_style_pad_all(s_list, 0, 0);
@@ -447,6 +657,8 @@ static void create_list_view(lv_obj_t *screen)
     lv_obj_set_flex_align(s_list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
     lv_obj_set_scroll_dir(s_list, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(s_list, LV_SCROLLBAR_MODE_AUTO);
+
+    create_current_card();
 }
 
 static void create_detail_view(lv_obj_t *screen)
@@ -465,7 +677,8 @@ static void create_detail_view(lv_obj_t *screen)
     lv_obj_set_style_pad_all(header, 14, 0);
 
     s_detail_title = lv_label_create(header);
-    lv_obj_set_width(s_detail_title, 350);
+    lv_obj_set_width(s_detail_title, LV_SIZE_CONTENT);
+    lv_obj_set_style_max_width(s_detail_title, 318, 0);
     lv_label_set_long_mode(s_detail_title, LV_LABEL_LONG_WRAP);
     lv_label_set_text(s_detail_title, "Loading…");
     set_common_text(s_detail_title, current_title_option()->font, COLOR_TEXT);
@@ -478,6 +691,8 @@ static void create_detail_view(lv_obj_t *screen)
     lv_obj_set_style_text_align(s_detail_meta, LV_TEXT_ALIGN_CENTER, 0);
     set_common_text(s_detail_meta, &lv_font_montserrat_16, COLOR_MUTED);
     lv_obj_align(s_detail_meta, LV_ALIGN_TOP_MID, 0, 0);
+
+    s_detail_voice = create_microphone(header);
 
     s_detail_body = lv_obj_create(s_detail_view);
     lv_obj_set_size(s_detail_body, 382, 312);
@@ -507,6 +722,7 @@ static void position_detail_body(void)
     lv_obj_update_layout(s_detail_view);
     lv_obj_update_layout(header);
     lv_obj_update_layout(s_detail_title);
+    position_microphone(s_detail_voice, s_detail_title);
 
     const lv_coord_t header_y = lv_obj_get_y(header);
     const lv_coord_t title_y = lv_obj_get_y(s_detail_title);
@@ -526,6 +742,18 @@ static void scroll_detail_to_end(void)
     position_detail_body();
     lv_obj_update_layout(s_detail_body);
     lv_obj_scroll_to_y(s_detail_body, LV_COORD_MAX, LV_ANIM_OFF);
+}
+
+static void update_detail_voice(void)
+{
+    if (s_detail_voice == NULL) return;
+    attention_voice_state_t state = ATTENTION_VOICE_UNKNOWN;
+    if (s_snapshot.current_thread.available
+        && strcmp(s_detail_id, s_snapshot.current_thread.id) == 0) {
+        state = s_snapshot.current_thread.voice_state;
+    }
+    position_microphone(s_detail_voice, s_detail_title);
+    lv_obj_set_style_text_color(s_detail_voice, voice_state_color(state), 0);
 }
 
 static void create_settings_font_row(
@@ -696,21 +924,29 @@ static void settings_back_clicked(lv_event_t *event)
     if (lv_event_get_code(event) == LV_EVENT_CLICKED) attention_ui_show_list();
 }
 
-void attention_ui_init(attention_ui_open_callback_t open_callback, void *context)
+void attention_ui_init(
+    attention_ui_open_callback_t open_callback,
+    attention_ui_focus_callback_t focus_callback,
+    void *context
+)
 {
     s_open_callback = open_callback;
+    s_focus_callback = focus_callback;
     s_open_context = context;
     memset(&s_snapshot, 0, sizeof(s_snapshot));
     memset(s_cards, 0, sizeof(s_cards));
     memset(s_card_titles, 0, sizeof(s_card_titles));
     s_selected_id[0] = '\0';
     s_detail_id[0] = '\0';
+    s_selected_is_current = false;
+    s_current_armed = false;
     load_font_settings();
 
     lv_obj_t *screen = lv_screen_active();
     lv_obj_set_style_bg_color(screen, COLOR_BG, 0);
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_all(screen, 0, 0);
+    lv_obj_remove_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
 
     create_list_view(screen);
     create_detail_view(screen);
@@ -722,18 +958,33 @@ void attention_ui_render(const attention_snapshot_t *snapshot)
     if (snapshot == NULL) return;
 
     char prior_selected[ATTENTION_ID_MAX];
+    char prior_current[ATTENTION_ID_MAX];
     strlcpy(prior_selected, s_selected_id, sizeof(prior_selected));
+    strlcpy(prior_current, s_snapshot.current_thread.id, sizeof(prior_current));
     s_snapshot = *snapshot;
 
+    if (strcmp(prior_current, s_snapshot.current_thread.id) != 0) s_current_armed = false;
+
     const int32_t selected = find_item(prior_selected);
-    if (selected >= 0) {
+    if (s_snapshot.current_thread.available
+        && strcmp(prior_selected, s_snapshot.current_thread.id) == 0) {
+        s_selected_is_current = true;
+        strlcpy(s_selected_id, prior_selected, sizeof(s_selected_id));
+    } else if (selected >= 0) {
         s_selected_index = (uint32_t)selected;
+        s_selected_is_current = false;
         strlcpy(s_selected_id, prior_selected, sizeof(s_selected_id));
     } else if (s_snapshot.count > 0) {
         s_selected_index = 0;
+        s_selected_is_current = false;
         strlcpy(s_selected_id, s_snapshot.items[0].id, sizeof(s_selected_id));
+    } else if (s_snapshot.current_thread.available) {
+        s_selected_index = 0;
+        s_selected_is_current = true;
+        strlcpy(s_selected_id, s_snapshot.current_thread.id, sizeof(s_selected_id));
     } else {
         s_selected_index = 0;
+        s_selected_is_current = false;
         s_selected_id[0] = '\0';
     }
 
@@ -746,6 +997,7 @@ void attention_ui_render(const attention_snapshot_t *snapshot)
         && snapshot->desktop_state_available;
     lv_obj_set_style_bg_color(s_status_dot, status_ok ? COLOR_GREEN : COLOR_RED, 0);
 
+    const int32_t prior_scroll_y = lv_obj_get_scroll_y(s_list);
     memset(s_cards, 0, sizeof(s_cards));
     memset(s_card_titles, 0, sizeof(s_card_titles));
     lv_obj_clean(s_list);
@@ -772,23 +1024,68 @@ void attention_ui_render(const attention_snapshot_t *snapshot)
         apply_selection(false);
     }
 
-    if (attention_ui_is_detail_visible() && find_item(s_detail_id) < 0) {
+    // lv_obj_clean resets scroll. Restore it only after flex has measured the
+    // new cards; bounded scrolling clamps it if the inbox became shorter.
+    lv_obj_update_layout(s_list);
+    lv_obj_scroll_to_y(s_list, prior_scroll_y, LV_ANIM_OFF);
+    update_current_card();
+    apply_selection(false);
+    update_detail_voice();
+
+    if (attention_ui_is_detail_visible() && find_item(s_detail_id) < 0
+        && (!s_snapshot.current_thread.available
+            || strcmp(s_detail_id, s_snapshot.current_thread.id) != 0)) {
         attention_ui_show_list();
     }
 }
 
 bool attention_ui_select_next(void)
 {
-    if (s_snapshot.count == 0) return false;
+    if (s_snapshot.count == 0 && !s_snapshot.current_thread.available) return false;
+    if (s_selected_is_current) {
+        s_current_armed = false;
+        if (s_snapshot.count > 0) select_index(0, true);
+        return true;
+    }
+    if (s_snapshot.current_thread.available && s_selected_index + 1U >= s_snapshot.count) {
+        select_current();
+        s_current_armed = false;
+        return true;
+    }
     select_index((s_selected_index + 1U) % s_snapshot.count, true);
     return true;
 }
 
 bool attention_ui_activate_selected(void)
 {
-    if (s_snapshot.count == 0 || s_selected_id[0] == '\0') return false;
+    if (s_selected_id[0] == '\0') return false;
+    s_current_armed = false;
     if (s_open_callback != NULL) s_open_callback(s_selected_id, s_open_context);
     return true;
+}
+
+bool attention_ui_get_voice_target_id(char *output, size_t output_size)
+{
+    if (output == NULL || output_size == 0) return false;
+    if (attention_ui_is_settings_visible()) return false;
+    const char *target = attention_ui_is_detail_visible() ? s_detail_id : s_selected_id;
+    if (target[0] == '\0') return false;
+    strlcpy(output, target, output_size);
+    return true;
+}
+
+void attention_ui_set_voice_state(const char *thread_id, attention_voice_state_t state)
+{
+    if (thread_id == NULL || !s_snapshot.current_thread.available
+        || strcmp(thread_id, s_snapshot.current_thread.id) != 0) return;
+    s_snapshot.current_thread.voice_state = state;
+    update_current_card();
+    update_detail_voice();
+}
+
+void attention_ui_fixed_focus_failed(void)
+{
+    s_current_armed = false;
 }
 
 bool attention_ui_get_selected_id(char *output, size_t output_size)
@@ -801,18 +1098,22 @@ bool attention_ui_get_selected_id(char *output, size_t output_size)
 void attention_ui_show_list(void)
 {
     s_detail_id[0] = '\0';
+    s_current_armed = false;
     lv_obj_add_flag(s_detail_view, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_settings_view, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(s_list_view, LV_OBJ_FLAG_HIDDEN);
     apply_selection(true);
+    lv_obj_invalidate(lv_screen_active());
 }
 
 void attention_ui_show_settings(void)
 {
+    s_current_armed = false;
     lv_obj_add_flag(s_list_view, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_detail_view, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(s_settings_view, LV_OBJ_FLAG_HIDDEN);
     apply_font_settings();
+    lv_obj_invalidate(lv_screen_active());
 }
 
 void attention_ui_show_detail_loading(const char *thread_id)
@@ -825,14 +1126,20 @@ void attention_ui_show_detail_loading(const char *thread_id)
         const attention_item_t *item = &s_snapshot.items[index];
         lv_label_set_text(s_detail_title, item->title);
         lv_label_set_text(s_detail_meta, item->project);
+    } else if (s_snapshot.current_thread.available
+        && strcmp(thread_id, s_snapshot.current_thread.id) == 0) {
+        lv_label_set_text(s_detail_title, s_snapshot.current_thread.title);
+        lv_label_set_text(s_detail_meta, s_snapshot.current_thread.project);
     } else {
         lv_label_set_text(s_detail_title, "Codex thread");
         lv_label_set_text(s_detail_meta, "Codex");
     }
     lv_label_set_text(s_detail_text, "Loading latest text…");
+    update_detail_voice();
     scroll_detail_to_end();
     lv_obj_add_flag(s_list_view, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(s_detail_view, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_invalidate(lv_screen_active());
 }
 
 void attention_ui_render_detail(const attention_detail_t *detail)

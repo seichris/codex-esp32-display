@@ -87,6 +87,8 @@ export async function loadConfig() {
     ),
     codexBin: resolveCodexBin(process.env.CODEX_BIN ?? fileConfig.codexBin ?? 'codex'),
     codexHome: expandHome(process.env.CODEX_HOME ?? fileConfig.codexHome ?? '~/.codex'),
+    desktopControlDirectory: process.env.CODEX_DESKTOP_CONTROL_DIR ?? '',
+    desktopControlToken: process.env.CODEX_DESKTOP_CONTROL_TOKEN ?? '',
   };
 
   const loopback = new Set(['127.0.0.1', '::1', 'localhost']);

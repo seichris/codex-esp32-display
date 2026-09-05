@@ -18,5 +18,10 @@ let package = Package(
             name: "CodexESP32Display",
             path: "Sources/CodexESP32Display"
         ),
+        .testTarget(
+            name: "CodexESP32DisplayTests",
+            dependencies: ["CodexESP32Display"],
+            path: "Tests/CodexESP32DisplayTests"
+        ),
     ]
 )

@@ -54,12 +54,14 @@ export function buildAttentionSnapshot({
   attentionFilter = DEFAULT_ATTENTION_FILTER,
   desktopStateAvailable = true,
   sourceError = null,
+  excludedIds = new Set(),
 }) {
   const items = [];
   const filter = normalizeAttentionFilter(attentionFilter);
 
   for (const thread of threads ?? []) {
     if (!thread || typeof thread.id !== 'string') continue;
+    if (excludedIds.has(thread.id)) continue;
     if (!includeSubagents && typeof thread.parentThreadId === 'string' && thread.parentThreadId.length > 0) continue;
 
     const status = normalizeThreadStatus(thread.status);

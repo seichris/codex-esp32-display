@@ -4,7 +4,9 @@
 
 The display is a physical inbox, not a process monitor. Its list is the union of
 threads that are waiting, unread, or pinned. A selected thread can be opened to
-read its latest useful text without marking it read.
+read its latest useful text without marking it read. It also acts as a
+standards-based USB microphone and fail-closed physical controller for Desktop
+Voice.
 
 ## Sources of truth
 
@@ -17,6 +19,8 @@ read its latest useful text without marking it read.
 | Unread / manually unread | Recognized IDs in `.codex-global-state.json` | None | No |
 | Newly completed | Live `turn/completed` intersected with unread | Plain unread after restart | No |
 | Latest text | `thread/turns/list`, full items, newest first | `thread/read(includeTurns=true)`, then the thread's local rollout file | No |
+| Voice target | Last exact-ID focus accepted by the menu-bar companion | None; shown as inferred | Explicit commands only |
+| Microphone privacy | ESP32 local PCM gate | Silence | Physical long press |
 
 ## Bridge components
 
@@ -42,8 +46,18 @@ read its latest useful text without marking it read.
 
 - merges sources, ranks cards, and truncates the device payload;
 - caches metadata and short-lived latest-text results;
-- only serves detail for IDs in the current attention payload;
+- only serves detail for IDs in the current attention payload or current Voice target;
 - reconnects App Server and preserves the last good list.
+
+### `DesktopVoiceController`
+
+- runs in the Swift menu-bar companion;
+- exchanges authenticated commands with its bridge child through a private,
+  per-launch, mode-0700 IPC directory;
+- opens a configurable exact-thread deep link and sends the user-configured
+  Codex Voice hotkey through macOS accessibility APIs;
+- reports focus as inferred until Codex exposes a stable acknowledgement;
+- never receives, stores, or transcribes microphone samples.
 
 ### HTTP bridge
 
@@ -52,6 +66,9 @@ read its latest useful text without marking it read.
 - `GET /api/v1/attention` — authenticated list;
 - `GET /api/v1/threads/:id/latest` — authenticated, bounded latest text;
 - `POST /api/v1/refresh` — authenticated forced refresh.
+- `GET /api/v1/desktop/state` — authenticated Desktop/Voice reconciliation;
+- `POST /api/v1/desktop/focus` — authenticated, idempotent exact-ID focus;
+- `POST /api/v1/desktop/voice` — authenticated, idempotent start/resume or mute.
 
 ## Firmware components
 
@@ -60,6 +77,9 @@ read its latest useful text without marking it read.
   response ceiling.
 - `attention_ui`: LVGL list, persistent selection, and scrollable detail view.
 - `button_input`: debounced BOOT/GPIO0 plus AXP2101 PWR short-press polling.
+- `voice_audio`: shared 48 kHz duplex I²S setup and ES7210 privacy gate.
+- `usb_microphone`: mono PCM16 USB Audio Class microphone for macOS.
+- `voice_control`: pure focus-before-voice state transitions.
 - `main`: independent list polling, detail fetching, and button tasks.
 
 All LVGL mutation is protected by the Waveshare BSP display lock. Detail HTTP
@@ -74,10 +94,14 @@ BOOT short  -> next highlighted item
 PWR short   -> open highlighted item / return from detail
 BOOT detail -> next item and open it
 Touch       -> scroll; tap a card to open
+Either button 1s -> start/resume or mute Voice for the selected/detail task
+Fixed card tap   -> focus; tap the still-selected card again for detail
 ```
 
-The AXP2101 integration enables and clears only the PKEY short-press status bit.
-It does not alter the PMIC's long-hold shutdown configuration.
+The AXP2101 integration enables short- and long-press IRQs and changes only REG
+27 bits 5:4 to select its documented one-second IRQ threshold. It preserves the
+independent OFFLEVEL bits and long-hold shutdown configuration. Physical
+behavior still requires verification on the exact board.
 
 ## Failure behavior
 
@@ -90,3 +114,5 @@ It does not alter the PMIC's long-hold shutdown configuration.
 - Thread removed while open: the next list refresh safely returns to the list.
 - Oversized payload: bridge truncation plus firmware response/text caps bound
   memory use.
+- Desktop control unavailable or wrong task: the ESP32 PCM gate remains closed.
+- Wi-Fi or bridge loss while starting Voice: the PCM gate remains closed.

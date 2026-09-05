@@ -1,7 +1,19 @@
 import { EventEmitter } from 'node:events';
-import { buildAttentionSnapshot, isAttentionRefreshNotification, notificationThreadId } from './attention.mjs';
+import {
+  buildAttentionSnapshot,
+  isAttentionRefreshNotification,
+  normalizeThreadStatus,
+  notificationThreadId,
+} from './attention.mjs';
 import { CodexAppServerClient } from './codex-app-server.mjs';
+import {
+  DesktopControlError,
+  DesktopControllerClient,
+  normalizeDesktopState,
+  unavailableDesktopState,
+} from './desktop-controller.mjs';
 import { DesktopStateReader } from './desktop-state.mjs';
+import { clampText, projectName } from './util.mjs';
 
 const PINNED_SECTION_ID = '01984de2-8f74-7c91-a3b2-5c5e937cf318';
 const DETAIL_MAX_BYTES = 5600;
@@ -42,6 +54,8 @@ export class CodexAttentionService extends EventEmitter {
   #config;
   #logger;
   #desktop;
+  #desktopController;
+  #desktopControlState = unavailableDesktopState();
   #client = null;
   #refreshPromise = null;
   #timer = null;
@@ -56,11 +70,15 @@ export class CodexAttentionService extends EventEmitter {
   #sourceError = null;
   #snapshot;
 
-  constructor(config, { logger = console } = {}) {
+  constructor(config, { logger = console, desktopController = null } = {}) {
     super();
     this.#config = config;
     this.#logger = logger;
     this.#desktop = new DesktopStateReader(config.codexHome);
+    this.#desktopController = desktopController ?? new DesktopControllerClient({
+      directory: config.desktopControlDirectory,
+      token: config.desktopControlToken,
+    });
     this.#snapshot = buildAttentionSnapshot({
       threads: [],
       attentionFilter: config.attentionFilter,
@@ -72,6 +90,35 @@ export class CodexAttentionService extends EventEmitter {
   get snapshot() { return this.#snapshot; }
   get connected() { return this.#client?.ready === true; }
   get desktopStatePath() { return this.#desktop.path; }
+
+  async desktopState() {
+    await this.#refreshDesktopControlState();
+    this.#decorateSnapshot();
+    return this.#desktopResponse();
+  }
+
+  async focusDesktop({ threadId, requestId }) {
+    const state = await this.#desktopController.focus(threadId, requestId);
+    this.#desktopControlState = normalizeDesktopState(state);
+    this.#decorateSnapshot();
+    this.emit('snapshot', this.#snapshot);
+    return this.#desktopResponse(requestId);
+  }
+
+  async voiceDesktop({ threadId, command, requestId }) {
+    if (command === 'start-or-resume' && this.#desktopControlState.threadId !== threadId) {
+      throw new DesktopControlError(
+        'desktop_thread_not_focused',
+        'Focus the requested thread before starting Desktop Voice.',
+        409,
+      );
+    }
+    const state = await this.#desktopController.voice(threadId, command, requestId);
+    this.#desktopControlState = normalizeDesktopState(state);
+    this.#decorateSnapshot();
+    this.emit('snapshot', this.#snapshot);
+    return this.#desktopResponse(requestId);
+  }
 
   async start() {
     this.#stopped = false;
@@ -103,7 +150,15 @@ export class CodexAttentionService extends EventEmitter {
   }
 
   async latestThread(threadId) {
-    const item = this.#snapshot.items.find((candidate) => candidate.id === threadId);
+    const item = this.#snapshot.items.find((candidate) => candidate.id === threadId)
+      ?? (this.#snapshot.currentThread?.id === threadId
+        ? {
+            ...this.#snapshot.currentThread,
+            reasons: [],
+            preview: this.#threadCache.get(threadId)?.preview ?? '',
+            updatedAt: this.#snapshot.currentThread.updatedAt ?? 0,
+          }
+        : null);
     if (!item) throw new AttentionThreadNotFoundError(threadId);
 
     const cached = this.#detailCache.get(threadId);
@@ -175,6 +230,7 @@ export class CodexAttentionService extends EventEmitter {
 
   async #doRefresh() {
     const desktopState = await this.#desktop.read();
+    await this.#refreshDesktopControlState();
 
     try {
       const client = await this.#ensureClient();
@@ -200,6 +256,7 @@ export class CodexAttentionService extends EventEmitter {
       }
 
       const wantedIds = new Set([...desktopState.unreadIds, ...desktopState.pinnedIds]);
+      if (this.#desktopControlState.threadId) wantedIds.add(this.#desktopControlState.threadId);
       const now = Date.now();
       const missing = [];
       for (const id of wantedIds) {
@@ -259,14 +316,66 @@ export class CodexAttentionService extends EventEmitter {
       attentionFilter: this.#config.attentionFilter,
       desktopStateAvailable: desktopState.available,
       sourceError: this.#sourceError,
+      excludedIds: new Set(
+        this.#desktopControlState.threadId ? [this.#desktopControlState.threadId] : [],
+      ),
     });
 
+    this.#decorateSnapshot();
+
     const currentIds = new Set(this.#snapshot.items.map((item) => item.id));
+    if (this.#snapshot.currentThread?.id) currentIds.add(this.#snapshot.currentThread.id);
     for (const threadId of this.#detailCache.keys()) {
       if (!currentIds.has(threadId)) this.#detailCache.delete(threadId);
     }
 
     this.emit('snapshot', this.#snapshot);
     return this.#snapshot;
+  }
+
+  async #refreshDesktopControlState() {
+    try {
+      this.#desktopControlState = normalizeDesktopState(await this.#desktopController.state());
+    } catch (error) {
+      if (error?.code !== 'desktop_control_unavailable') {
+        this.#logger.error(`[bridge] desktop controller: ${error instanceof Error ? error.message : error}`);
+      }
+      this.#desktopControlState = unavailableDesktopState();
+    }
+  }
+
+  #decorateSnapshot() {
+    const state = this.#desktopControlState;
+    const thread = state.threadId ? this.#threadCache.get(state.threadId) : null;
+    const currentThread = state.threadId
+      ? {
+          id: state.threadId,
+          title: clampText(thread?.name || thread?.preview || 'Current Codex thread', 96),
+          project: projectName(typeof thread?.cwd === 'string' ? thread.cwd : ''),
+          status: normalizeThreadStatus(thread?.status),
+          updatedAt: Number(thread?.updatedAt ?? thread?.updated_at ?? 0) || 0,
+          focusConfidence: state.focusConfidence,
+          voiceState: state.voiceState,
+        }
+      : null;
+    this.#snapshot = {
+      ...this.#snapshot,
+      currentThread,
+      desktopControlAvailable: state.available,
+      capabilities: { ...state.capabilities },
+    };
+  }
+
+  #desktopResponse(requestId = undefined) {
+    const state = this.#desktopControlState;
+    return {
+      version: 1,
+      ...(requestId ? { requestId } : {}),
+      threadId: state.threadId,
+      desktopControlAvailable: state.available,
+      focusConfidence: state.focusConfidence,
+      voiceState: state.voiceState,
+      capabilities: { ...state.capabilities },
+    };
   }
 }

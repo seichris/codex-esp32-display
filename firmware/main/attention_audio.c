@@ -9,7 +9,7 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 
-#define CHIME_SAMPLE_RATE 22050U
+#define CHIME_SAMPLE_RATE 48000U
 #define CHIME_FIRST_TONE_HZ 880U
 #define CHIME_SECOND_TONE_HZ 1175U
 #define CHIME_FIRST_TONE_MS 110U

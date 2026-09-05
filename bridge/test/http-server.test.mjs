@@ -17,6 +17,32 @@ async function withServer(callback) {
       diagnostics: {},
     },
     async refresh() { return this.snapshot; },
+    async desktopState() {
+      return {
+        version: 1,
+        threadId: THREAD_ID,
+        focusConfidence: 'inferred',
+        voiceState: 'muted',
+      };
+    },
+    async focusDesktop(body) {
+      return {
+        version: 1,
+        requestId: body.requestId,
+        threadId: body.threadId,
+        focusConfidence: 'inferred',
+        voiceState: 'muted',
+      };
+    },
+    async voiceDesktop(body) {
+      return {
+        version: 1,
+        requestId: body.requestId,
+        threadId: body.threadId,
+        focusConfidence: 'inferred',
+        voiceState: body.command === 'mute' ? 'muted' : 'listening',
+      };
+    },
     async latestThread(threadId) {
       if (threadId !== THREAD_ID) {
         const error = new Error('missing');
@@ -63,5 +89,51 @@ test('latest text endpoint is authenticated and rejects non-attention threads', 
 
     const missing = await fetch(`${base}/api/v1/threads/not-in-inbox/latest`, { headers });
     assert.equal(missing.status, 404);
+  });
+});
+
+test('Desktop endpoints validate JSON strictly and route authenticated commands', async () => {
+  await withServer(async (base) => {
+    const headers = {
+      Authorization: 'Bearer abcdefghijklmnopqrstuvwxyz123456',
+      'Content-Type': 'application/json',
+    };
+    const state = await fetch(`${base}/api/v1/desktop/state`, { headers });
+    assert.equal(state.status, 200);
+    assert.equal((await state.json()).threadId, THREAD_ID);
+
+    const focus = await fetch(`${base}/api/v1/desktop/focus`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ threadId: THREAD_ID, requestId: 'focus-1' }),
+    });
+    assert.equal(focus.status, 200);
+    assert.equal((await focus.json()).requestId, 'focus-1');
+
+    const voice = await fetch(`${base}/api/v1/desktop/voice`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        threadId: THREAD_ID,
+        requestId: 'voice-1',
+        command: 'start-or-resume',
+      }),
+    });
+    assert.equal(voice.status, 200);
+    assert.equal((await voice.json()).voiceState, 'listening');
+
+    const unknownField = await fetch(`${base}/api/v1/desktop/focus`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ threadId: THREAD_ID, requestId: 'focus-2', extra: true }),
+    });
+    assert.equal(unknownField.status, 400);
+
+    const wrongType = await fetch(`${base}/api/v1/desktop/voice`, {
+      method: 'POST',
+      headers: { Authorization: headers.Authorization, 'Content-Type': 'text/plain' },
+      body: '{}',
+    });
+    assert.equal(wrongType.status, 415);
   });
 });

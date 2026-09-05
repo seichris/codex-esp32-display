@@ -65,11 +65,14 @@ final class BridgeController: ObservableObject {
     let endpoint = URL(string: "http://127.0.0.1:5180/api/v1/attention")!
     let dashboardURL = URL(string: "http://127.0.0.1:5180/")!
     let logURL: URL
+    let desktopVoiceController = DesktopVoiceController()
 
     private let bridgeRoot: URL
+    private var bridgeToken: String?
     private var process: Process?
     private var logHandle: FileHandle?
     private var healthTimer: Timer?
+    private lazy var voiceSettingsWindow = VoiceSettingsWindowController(dictation: desktopVoiceController.dictation)
 
     init() {
         _ = FileManager.default.changeCurrentDirectoryPath("/tmp")
@@ -96,6 +99,8 @@ final class BridgeController: ObservableObject {
 
     func start() {
         guard process == nil else { return }
+
+        bridgeToken = Self.resolveBridgeToken(from: bridgeRoot)
 
         let bridgeEntry = bridgeRoot.appendingPathComponent("bridge/src/index.mjs")
         guard FileManager.default.fileExists(atPath: bridgeEntry.path) else {
@@ -137,6 +142,10 @@ final class BridgeController: ObservableObject {
             if let codexURL = Self.resolveCodex() {
                 environment["CODEX_BIN"] = codexURL.path
             }
+            if let control = desktopVoiceController.environment {
+                environment["CODEX_DESKTOP_CONTROL_DIR"] = control.directory
+                environment["CODEX_DESKTOP_CONTROL_TOKEN"] = control.token
+            }
             child.environment = environment
             child.terminationHandler = { [weak self] terminatedProcess in
                 Task { @MainActor [weak self] in
@@ -176,7 +185,15 @@ final class BridgeController: ObservableObject {
     }
 
     func openDashboard() {
-        NSWorkspace.shared.open(dashboardURL)
+        var url = dashboardURL
+        if let bridgeToken, !bridgeToken.isEmpty,
+           var components = URLComponents(url: dashboardURL, resolvingAgainstBaseURL: false) {
+            var fragment = URLComponents()
+            fragment.queryItems = [URLQueryItem(name: "token", value: bridgeToken)]
+            components.percentEncodedFragment = fragment.percentEncodedQuery
+            url = components.url ?? dashboardURL
+        }
+        NSWorkspace.shared.open(url)
     }
 
     func copyEndpoint() {
@@ -187,6 +204,10 @@ final class BridgeController: ObservableObject {
 
     func revealLogs() {
         NSWorkspace.shared.activateFileViewerSelecting([logURL])
+    }
+
+    func openVoiceSettings() {
+        voiceSettingsWindow.show()
     }
 
     private func processDidTerminate(status: Int32) {
@@ -275,6 +296,21 @@ final class BridgeController: ObservableObject {
         return URL(fileURLWithPath: fileManager.currentDirectoryPath).standardizedFileURL
     }
 
+    private static func resolveBridgeToken(from bridgeRoot: URL) -> String? {
+        if let environmentToken = ProcessInfo.processInfo.environment["CODEX_ATTENTION_TOKEN"] {
+            return environmentToken.isEmpty ? nil : environmentToken
+        }
+
+        let configURL = bridgeRoot.appendingPathComponent("bridge/config.json")
+        guard let data = try? Data(contentsOf: configURL),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let token = object["token"] as? String,
+              !token.isEmpty else {
+            return nil
+        }
+        return token
+    }
+
     private static func resolveNode() -> URL? {
         let fileManager = FileManager.default
         var candidates = [
@@ -298,7 +334,10 @@ final class BridgeController: ObservableObject {
 
     private static func resolveCodex() -> URL? {
         let fileManager = FileManager.default
-        let candidates = [
+        // Read metadata with the same Desktop version that owns the event
+        // connection. An older PATH CLI may not understand its task storage.
+        let bundled = CodexAppLink.applicationURL?.appendingPathComponent("Contents/Resources/codex").path
+        let candidates = [bundled].compactMap { $0 } + [
             "/opt/homebrew/bin/codex",
             "/usr/local/bin/codex",
             fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin/codex").path,
