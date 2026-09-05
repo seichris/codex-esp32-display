@@ -50,6 +50,12 @@ static void assert_viewport(void)
     assert(fixed.y2 == lv_display_get_vertical_resolution(NULL) - 9);
     assert(lv_obj_get_scroll_y(s_list_view) == 0);
     assert(lv_obj_get_parent(s_current_card) == s_list_view);
+    assert(area(s_current_title).x1 == area(s_status_dot).x1);
+    assert(area(s_current_meta).x1 == area(s_status_dot).x1);
+    lv_font_glyph_dsc_t settings_glyph;
+    assert(lv_font_get_glyph_dsc(STATUS_ICON_FONT, &settings_glyph, 0xf013, 0));
+    assert(lv_obj_get_height(s_current_voice) == settings_glyph.box_h);
+    assert(lv_obj_get_width(s_current_voice) == STATUS_ICON_SIZE);
 }
 
 static void settle_scroll(void)

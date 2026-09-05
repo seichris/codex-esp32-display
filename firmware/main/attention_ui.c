@@ -55,10 +55,17 @@ static const lv_color_t COLOR_RED = LV_COLOR_MAKE(255, 139, 151);
 #define LIST_HEADER_TITLE_INSET 60
 #define LIST_HEADER_EDGE_INSET 10
 #define SETTINGS_BUTTON_SIZE 42
+#define STATUS_ICON_SIZE 24
+#define STATUS_ICON_FONT (&lv_font_montserrat_24)
 #define LIST_HEADER_SETTINGS_INSET (LIST_HEADER_EDGE_INSET + SETTINGS_BUTTON_SIZE)
 #define DETAIL_TEXT_TOP_INSET 4
 #define DETAIL_BOTTOM_MARGIN 10
 #define CURRENT_CARD_HEIGHT 80
+#define CURRENT_CARD_WIDTH 390
+#define CURRENT_CARD_BORDER 2
+#define CURRENT_CARD_PADDING 10
+#define CURRENT_CARD_LEFT_PADDING (LIST_HEADER_TITLE_INSET - LIST_HEADER_EDGE_INSET - CURRENT_CARD_BORDER)
+#define CURRENT_CARD_TITLE_WIDTH (CURRENT_CARD_WIDTH - CURRENT_CARD_BORDER * 2 - CURRENT_CARD_LEFT_PADDING - CURRENT_CARD_PADDING - STATUS_ICON_SIZE - 8)
 #define CURRENT_CARD_BOTTOM 8
 #define LIST_VIEW_GAP 6
 #define SETTINGS_NVS_NAMESPACE "attention_ui"
@@ -314,14 +321,14 @@ static void draw_microphone(lv_event_t *event)
     capsule.border_color = color;
     capsule.border_width = 2;
     capsule.radius = 5;
-    const lv_area_t body = {x + 7, y + 1, x + 16, y + 17};
+    const lv_area_t body = {x + 7, y + 1, x + 16, y + 14};
     lv_draw_rect(layer, &capsule, &body);
 
     lv_draw_arc_dsc_t cradle;
     lv_draw_arc_dsc_init(&cradle);
     cradle.color = color;
     cradle.width = 2;
-    cradle.center = (lv_point_t){x + 12, y + 14};
+    cradle.center = (lv_point_t){x + 12, y + 11};
     cradle.radius = 10;
     cradle.start_angle = 0;
     cradle.end_angle = 180;
@@ -331,8 +338,8 @@ static void draw_microphone(lv_event_t *event)
     lv_draw_line_dsc_init(&line);
     line.color = color;
     line.width = 2;
-    const int32_t segments[][4] = {{3, 11, 3, 14}, {21, 11, 21, 14},
-                                  {12, 23, 12, 27}, {7, 27, 17, 27}};
+    const int32_t segments[][4] = {{3, 8, 3, 11}, {21, 8, 21, 11},
+                                  {12, 20, 12, 23}, {7, 23, 17, 23}};
     for (unsigned i = 0; i < sizeof(segments) / sizeof(segments[0]); ++i) {
         line.p1 = (lv_point_precise_t){x + segments[i][0], y + segments[i][1]};
         line.p2 = (lv_point_precise_t){x + segments[i][2], y + segments[i][3]};
@@ -345,7 +352,7 @@ static lv_obj_t *create_microphone(lv_obj_t *parent)
     lv_obj_t *icon = lv_obj_create(parent);
     lv_obj_remove_style_all(icon);
     lv_obj_remove_flag(icon, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_size(icon, 24, 29);
+    lv_obj_set_size(icon, STATUS_ICON_SIZE, STATUS_ICON_SIZE);
     lv_obj_set_style_text_color(icon, COLOR_MUTED, 0);
     lv_obj_add_event_cb(icon, draw_microphone, LV_EVENT_DRAW_MAIN, NULL);
     return icon;
@@ -448,28 +455,29 @@ static void create_current_card(void)
     s_current_card = lv_obj_create(s_list_view);
     lv_obj_remove_flag(s_current_card, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(s_current_card, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_size(s_current_card, 390, CURRENT_CARD_HEIGHT);
+    lv_obj_set_size(s_current_card, CURRENT_CARD_WIDTH, CURRENT_CARD_HEIGHT);
     lv_obj_set_flex_grow(s_current_card, 0);
     lv_obj_set_style_radius(s_current_card, 10, 0);
     lv_obj_set_style_bg_color(s_current_card, lv_color_make(18, 23, 31), 0);
     lv_obj_set_style_bg_opa(s_current_card, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(s_current_card, 2, 0);
+    lv_obj_set_style_border_width(s_current_card, CURRENT_CARD_BORDER, 0);
     lv_obj_set_style_border_color(s_current_card, COLOR_BORDER, 0);
-    lv_obj_set_style_pad_all(s_current_card, 10, 0);
+    lv_obj_set_style_pad_all(s_current_card, CURRENT_CARD_PADDING, 0);
+    lv_obj_set_style_pad_left(s_current_card, CURRENT_CARD_LEFT_PADDING, 0);
     lv_obj_add_event_cb(s_current_card, current_card_clicked, LV_EVENT_CLICKED, NULL);
 
     s_current_voice = create_microphone(s_current_card);
 
     s_current_title = lv_label_create(s_current_card);
     lv_obj_set_width(s_current_title, LV_SIZE_CONTENT);
-    lv_obj_set_style_max_width(s_current_title, 330, 0);
+    lv_obj_set_style_max_width(s_current_title, CURRENT_CARD_TITLE_WIDTH, 0);
     lv_label_set_long_mode(s_current_title, LV_LABEL_LONG_DOT);
     lv_label_set_text(s_current_title, "Connecting to the Mac");
     set_common_text(s_current_title, &lv_font_montserrat_20, COLOR_TEXT);
     lv_obj_align(s_current_title, LV_ALIGN_TOP_LEFT, 0, 2);
 
     s_current_meta = lv_label_create(s_current_card);
-    lv_obj_set_width(s_current_meta, 364);
+    lv_obj_set_width(s_current_meta, lv_pct(100));
     lv_label_set_long_mode(s_current_meta, LV_LABEL_LONG_DOT);
     lv_label_set_text(s_current_meta, "Waiting for bridge status");
     set_common_text(s_current_meta, &lv_font_montserrat_14, COLOR_MUTED);
@@ -620,7 +628,7 @@ static void create_list_view(lv_obj_t *screen)
         LV_SYMBOL_SETTINGS,
         SETTINGS_BUTTON_SIZE,
         SETTINGS_BUTTON_SIZE,
-        &lv_font_montserrat_24,
+        STATUS_ICON_FONT,
         COLOR_TEXT,
         settings_icon_clicked,
         NULL
