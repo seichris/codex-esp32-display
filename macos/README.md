@@ -45,6 +45,9 @@ result after stopping, preserve the latest non-empty transcript for review. Late
 callbacks cannot overwrite the editable draft, and starting another recording
 requires discarding any existing text first. The existing firmware uses `VOICE MUTED`
 while the companion finishes transcription and `VOICE READY` when a draft exists.
+On-device Speech can reset its current transcription after a pause without ending
+the request; the companion accumulates those completed partial utterances so one
+long-press session keeps all spoken phrases.
 The updated firmware closes its gate when a fresh companion snapshot reports
 that recording ended or became unavailable, and enforces a 60-second local
 limit even if networking fails. Older firmware still needs the second physical

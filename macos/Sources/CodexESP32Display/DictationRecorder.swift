@@ -24,6 +24,7 @@ final class DictationRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDel
     private var lastLevel = Date.distantPast
     private var startDeadline = Date.distantPast
     private var lastBufferAt = Date.distantPast
+    private var transcriptAccumulator = DictationTranscriptAccumulator()
 
     static var device: AVCaptureDevice? { AVCaptureDevice(uniqueID: deviceID) }
     static var permissionReady: Bool {
@@ -48,6 +49,7 @@ final class DictationRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDel
                 self.finishing = false
                 self.samples = 0
                 self.peak = 0
+                self.transcriptAccumulator.reset()
                 do {
                     guard Self.permissionReady else { throw DictationError.message("Allow Microphone and Speech Recognition in Voice Settings.") }
                     guard let device = Self.device else { throw DictationError.message("Connect the Waveshare Voice Microphone by USB.") }
@@ -64,7 +66,11 @@ final class DictationRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDel
                         self.queue.async {
                             guard self.generation == id else { return }
                             if let result {
-                                self.event?(.transcript(result.bestTranscription.formattedString, final: result.isFinal))
+                                let transcript = self.transcriptAccumulator.update(
+                                    result.bestTranscription.formattedString,
+                                    completedPartial: result.speechRecognitionMetadata != nil
+                                )
+                                self.event?(.transcript(transcript, final: result.isFinal))
                                 if result.isFinal { self.cleanup(); return }
                             }
                             if let error { self.fail("Speech recognition failed: \(error.localizedDescription)") }
@@ -167,6 +173,7 @@ final class DictationRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDel
 
     private func cleanup() {
         generation = nil
+        transcriptAccumulator.reset()
         session?.stopRunning()
         session = nil
         request?.endAudio()
