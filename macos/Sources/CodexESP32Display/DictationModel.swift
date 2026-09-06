@@ -215,6 +215,9 @@ final class DictationModel: ObservableObject {
             }
             draftText = session.text
             if final {
+                // Speech can finish naturally without a preceding finish event.
+                // Stop the board stream before handing off or clearing its ID.
+                if sessionTransport == .wifi { wirelessServer?.cancelActiveSession() }
                 level = 0
                 DictationRecordingOverlayController.shared.hide()
                 // update rejects terminal callbacks, so only the first completed

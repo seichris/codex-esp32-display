@@ -13,6 +13,15 @@ struct WirelessMicrophoneSession: Sendable {
         case listening
         case stopped
         case canceled
+
+        /// Cancellation is an interruption, not a successfully stopped
+        /// recording. The owner must still close its Speech receiver.
+        var requiresReceiverCancellation: Bool {
+            switch self {
+            case .prepared, .armed, .listening, .canceled: return true
+            case .disconnected, .authenticated, .stopped: return false
+            }
+        }
     }
 
     struct Snapshot: Equatable, Sendable {
@@ -80,7 +89,11 @@ struct WirelessMicrophoneSession: Sendable {
         // A normal stop ends only the current session; the authenticated
         // connection is intentionally reusable for the next physical gesture.
         // Clear per-session responses before accepting a fresh request ID.
+        guard phase != .canceled else { throw Error.invalidState("start after cancel") }
         if phase == .stopped {
+            // A delayed retry is not a new physical gesture. Check before
+            // dropping the completed session's idempotency key.
+            guard requestID != startRequestID else { throw Error.requestIDReused }
             startRequestID = nil
             preparedResponse = nil
             stoppedResponse = nil

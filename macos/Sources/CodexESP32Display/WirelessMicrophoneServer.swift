@@ -413,6 +413,11 @@ final class WirelessMicrophoneServer: @unchecked Sendable {
     }
 
     private func stopOnQueue() {
+        // Cancellation callbacks hold context weakly. Notify the receiver
+        // before revocation drops the last strong reference to its session.
+        if let context = connection {
+            reportFailureIfNeeded(context, reason: "Wireless microphone listener stopped or pairing changed.")
+        }
         connection?.authDeadline?.cancel()
         connection?.connection.cancel()
         connection = nil
@@ -492,6 +497,12 @@ final class WirelessMicrophoneServer: @unchecked Sendable {
             payload = data
             payloadOpcode = opcode
         } else {
+            let limit = context.fragmentedOpcode == .binary
+                ? WirelessMicrophoneProtocol.maxAudioMessageLength
+                : WirelessMicrophoneProtocol.maxControlMessageLength
+            guard data.count <= limit - context.fragmentedMessage.count else {
+                fail(context, "fragmented message too large"); return
+            }
             context.fragmentedMessage.append(data)
             payload = context.fragmentedMessage
             payloadOpcode = context.fragmentedOpcode ?? opcode
@@ -535,7 +546,18 @@ final class WirelessMicrophoneServer: @unchecked Sendable {
                 Task {
                     let accepted = await self.onStart?(threadID, sessionID) ?? false
                     self.queue.async {
-                        guard self.connection === context else { return }
+                        guard self.connection === context,
+                              context.session.phase == .prepared,
+                              context.startDecision == .pending else {
+                            // The disconnect callback may have run before
+                            // onStart finished preparing Speech. Clean up
+                            // again now, scoped to this obsolete session UUID.
+                            if accepted {
+                                let callback = self.onSessionFailure
+                                Task { await callback?(threadID, sessionID, "Wireless microphone disconnected during preparation.") }
+                            }
+                            return
+                        }
                         if accepted {
                             context.startDecision = .accepted
                             self.send(context, prepared)
@@ -566,6 +588,7 @@ final class WirelessMicrophoneServer: @unchecked Sendable {
                 }
             case .cancel:
                 try context.session.cancel(message)
+                reportFailureIfNeeded(context, reason: "Wireless microphone session canceled by the board.")
                 context.connection.cancel()
             default:
                 throw WirelessMicrophoneSession.Error.invalidState("unexpected \(message.type.rawValue)")
@@ -613,7 +636,7 @@ final class WirelessMicrophoneServer: @unchecked Sendable {
     private func reportFailureIfNeeded(_ context: ConnectionContext, reason: String) {
         guard !context.suppressFailureCallback, !context.failureCallbackReported else { return }
         let snapshot = context.session.snapshot
-        guard [.prepared, .armed, .listening].contains(snapshot.phase),
+        guard snapshot.phase.requiresReceiverCancellation,
               let threadID = snapshot.threadID,
               let sessionID = snapshot.sessionID else { return }
         context.failureCallbackReported = true
