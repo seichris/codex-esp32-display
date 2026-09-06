@@ -15,6 +15,7 @@ static unsigned semaphore_count;
 static TickType_t ticks;
 static void (*on_wait)(void);
 static void (*during_read)(void);
+static void (*during_reset)(void);
 static void (*capture_entry)(void *);
 static jmp_buf capture_exit;
 static unsigned codec_reads;
@@ -46,7 +47,10 @@ QueueHandle_t xQueueCreate(unsigned capacity, size_t width) {
     assert(capacity <= 10 && width == 1920);
     queue_storage = (struct fake_queue){ .capacity = capacity, .width = width }; return &queue_storage;
 }
-int xQueueReset(QueueHandle_t q) { q->head = 0; q->count = 0; return pdTRUE; }
+int xQueueReset(QueueHandle_t q) { q->head = 0; q->count = 0;
+    if (during_reset) { void (*action)(void) = during_reset; during_reset = NULL; action(); }
+    return pdTRUE;
+}
 int xQueueSend(QueueHandle_t q, const void *data, TickType_t timeout) {
     assert(timeout == 0);
     if (q->count == q->capacity) return pdFALSE;
@@ -84,7 +88,7 @@ static void restart(void) { voice_audio_set_listening(false); voice_audio_set_li
 static void start(void) { voice_audio_set_listening(true); }
 static void switch_source(void) { voice_audio_set_source(VOICE_AUDIO_SOURCE_USB); }
 static void setup(void) {
-    semaphore_count = 0; ticks = 0; blocking_waits = 0; on_wait = NULL; during_read = NULL;
+    semaphore_count = 0; ticks = 0; blocking_waits = 0; on_wait = NULL; during_read = NULL; during_reset = NULL;
     assert(voice_audio_init() == ESP_OK);
     voice_audio_set_source(VOICE_AUDIO_SOURCE_WIFI); voice_audio_set_listening(true);
 }
@@ -140,5 +144,9 @@ int main(void) {
     setup(); for (unsigned i = 0; i < 11; ++i) capture_one();
     assert(voice_audio_take_overflow()); assert(!voice_audio_take_overflow());
     puts("PASS ring overflow remains latched and bounded");
+    setup(); voice_audio_set_listening(false); during_reset = stop;
+    voice_audio_set_listening(true);
+    assert(!voice_audio_is_listening());
+    puts("PASS stop between reset and gate opening wins atomically");
     return 0;
 }

@@ -28,14 +28,20 @@ static SemaphoreHandle_t s_queue_lock;
 static SemaphoreHandle_t s_frame_ready;
 static SemaphoreHandle_t s_codec_lock;
 static TaskHandle_t s_capture_task;
-static atomic_bool s_listening;
 static atomic_bool s_host_muted;
 static atomic_bool s_capture_overflow;
 static atomic_int s_source;
+// Bit 0 is the PCM gate; upper bits are its generation. Keeping both in one
+// atomic word lets a concurrent stop invalidate an opening CAS atomically.
 static atomic_uint s_capture_epoch;
 static capture_frame_t s_usb_pending;
 static size_t s_usb_pending_offset;
 static bool s_usb_pending_valid;
+
+static bool capture_listening(void)
+{
+    return (atomic_load(&s_capture_epoch) & 1U) != 0;
+}
 
 // Caller owns s_queue_lock. Waking a waiter is also required on stop/source
 // changes so it can recheck the gate rather than wait for nonexistent audio.
@@ -55,7 +61,7 @@ static bool receive_frame(uint8_t *pcm, TickType_t timeout, voice_audio_source_t
     TickType_t remaining = timeout;
     while (true) {
         if (xSemaphoreTake(s_queue_lock, remaining) != pdTRUE) return false;
-        if (!atomic_load(&s_listening) || atomic_load(&s_source) != (int)source
+        if (!capture_listening() || atomic_load(&s_source) != (int)source
             || atomic_load(&s_capture_epoch) != epoch) {
             xSemaphoreGive(s_queue_lock);
             return false;
@@ -86,7 +92,7 @@ static void capture_task(void *argument)
         }
         const unsigned int epoch_at_read = atomic_load(&s_capture_epoch);
         const int source_at_read = atomic_load(&s_source);
-        const bool listening_at_read = atomic_load(&s_listening);
+        const bool listening_at_read = capture_listening();
         const int codec_result = esp_codec_dev_read(s_microphone, frame.pcm, (int)sizeof(frame.pcm));
         xSemaphoreGive(s_codec_lock);
         if (codec_result != ESP_CODEC_DEV_OK) {
@@ -94,13 +100,13 @@ static void capture_task(void *argument)
             continue;
         }
         // An in-flight codec read must never cross a gate/session boundary.
-        if (!listening_at_read || !atomic_load(&s_listening)) continue;
+        if (!listening_at_read || !capture_listening()) continue;
         if (s_capture_queue == NULL || s_queue_lock == NULL
             || xSemaphoreTake(s_queue_lock, pdMS_TO_TICKS(20)) != pdTRUE) {
             atomic_store(&s_capture_overflow, true);
             continue;
         }
-        const bool still_selected = atomic_load(&s_listening)
+        const bool still_selected = capture_listening()
             && atomic_load(&s_source) == source_at_read
             && atomic_load(&s_capture_epoch) == epoch_at_read;
         const bool queued = still_selected
@@ -157,7 +163,6 @@ esp_err_t voice_audio_init(void)
     s_frame_ready = xSemaphoreCreateBinary();
     s_codec_lock = xSemaphoreCreateMutex();
     if (s_capture_queue == NULL || s_queue_lock == NULL || s_codec_lock == NULL || s_frame_ready == NULL) return ESP_ERR_NO_MEM;
-    atomic_store(&s_listening, false);
     atomic_store(&s_host_muted, false);
     atomic_store(&s_capture_overflow, false);
     atomic_store(&s_source, VOICE_AUDIO_SOURCE_USB);
@@ -178,7 +183,7 @@ esp_err_t voice_audio_read(uint8_t *buffer, size_t length, size_t *bytes_read)
     if (buffer == NULL || bytes_read == NULL) return ESP_ERR_INVALID_ARG;
     *bytes_read = length;
     const unsigned int epoch = atomic_load(&s_capture_epoch);
-    if (s_microphone == NULL || !atomic_load(&s_listening)
+    if (s_microphone == NULL || !capture_listening()
         || atomic_load(&s_source) != VOICE_AUDIO_SOURCE_USB) {
         memset(buffer, 0, length);
         return s_microphone == NULL ? ESP_ERR_INVALID_STATE : ESP_OK;
@@ -189,7 +194,7 @@ esp_err_t voice_audio_read(uint8_t *buffer, size_t length, size_t *bytes_read)
         memset(buffer, 0, length);
         return ESP_OK;
     }
-    if (!atomic_load(&s_listening) || atomic_load(&s_source) != VOICE_AUDIO_SOURCE_USB) {
+    if (!capture_listening() || atomic_load(&s_source) != VOICE_AUDIO_SOURCE_USB) {
         memset(buffer, 0, length);
         xSemaphoreGive(s_queue_lock);
         return ESP_OK;
@@ -211,7 +216,7 @@ esp_err_t voice_audio_read(uint8_t *buffer, size_t length, size_t *bytes_read)
         offset += amount;
     }
     xSemaphoreGive(s_queue_lock);
-    if (atomic_load(&s_host_muted) || !atomic_load(&s_listening)
+    if (atomic_load(&s_host_muted) || !capture_listening()
         || atomic_load(&s_source) != VOICE_AUDIO_SOURCE_USB
         || atomic_load(&s_capture_epoch) != epoch) memset(buffer, 0, length);
     return ESP_OK;
@@ -222,7 +227,7 @@ esp_err_t voice_audio_wireless_read_frame(uint8_t *buffer, size_t length, size_t
     if (buffer == NULL || bytes_read == NULL) return ESP_ERR_INVALID_ARG;
     *bytes_read = 0;
     const unsigned int epoch = atomic_load(&s_capture_epoch);
-    if (length < CAPTURE_FRAME_BYTES || !atomic_load(&s_listening)
+    if (length < CAPTURE_FRAME_BYTES || !capture_listening()
         || atomic_load(&s_source) != VOICE_AUDIO_SOURCE_WIFI) {
         if (length > 0) memset(buffer, 0, length < CAPTURE_FRAME_BYTES ? length : CAPTURE_FRAME_BYTES);
         return ESP_ERR_INVALID_STATE;
@@ -232,7 +237,7 @@ esp_err_t voice_audio_wireless_read_frame(uint8_t *buffer, size_t length, size_t
         memset(buffer, 0, CAPTURE_FRAME_BYTES);
         return ESP_ERR_TIMEOUT;
     }
-    if (!atomic_load(&s_listening) || atomic_load(&s_source) != VOICE_AUDIO_SOURCE_WIFI
+    if (!capture_listening() || atomic_load(&s_source) != VOICE_AUDIO_SOURCE_WIFI
         || atomic_load(&s_capture_epoch) != epoch) {
         memset(buffer, 0, CAPTURE_FRAME_BYTES);
         return ESP_ERR_INVALID_STATE;
@@ -243,11 +248,12 @@ esp_err_t voice_audio_wireless_read_frame(uint8_t *buffer, size_t length, size_t
 
 void voice_audio_set_listening(bool listening)
 {
-    const unsigned int requested_epoch = atomic_load(&s_capture_epoch);
+    unsigned int requested_epoch = atomic_load(&s_capture_epoch);
     if (!listening) {
-        // Closing the privacy gate must not depend on acquiring a mutex.
-        atomic_store(&s_listening, false);
-        atomic_fetch_add(&s_capture_epoch, 1);
+        // Closing the gate and invalidating a pending start are one atomic
+        // operation, independent of mutex acquisition or producer progress.
+        while (!atomic_compare_exchange_weak(&s_capture_epoch, &requested_epoch,
+                                              (requested_epoch + 2U) & ~1U)) {}
         atomic_store(&s_capture_overflow, false);
         if (s_frame_ready != NULL) xSemaphoreGive(s_frame_ready);
     }
@@ -255,13 +261,15 @@ void voice_audio_set_listening(bool listening)
         || xSemaphoreTake(s_queue_lock, pdMS_TO_TICKS(20)) != pdTRUE) return;
     if (listening && atomic_load(&s_capture_epoch) != requested_epoch) {
         xSemaphoreGive(s_queue_lock);
-        return; // A stop/source change won while this start waited for the lock.
+        return;
     }
-    if (!listening || !atomic_load(&s_listening)) {
+    if (!listening || !(requested_epoch & 1U)) {
         reset_capture_queue_locked();
         if (listening) {
-            atomic_fetch_add(&s_capture_epoch, 1);
-            atomic_store(&s_listening, true);
+            // A stop during queue reset wins: never reopen it with a stale
+            // store after checking the generation earlier in this function.
+            (void)atomic_compare_exchange_strong(&s_capture_epoch, &requested_epoch,
+                                                  (requested_epoch + 2U) | 1U);
         }
     }
     xSemaphoreGive(s_queue_lock);
@@ -281,7 +289,7 @@ void voice_audio_set_source(voice_audio_source_t source)
         return;
     }
     if (atomic_load(&s_source) != (int)source) {
-        atomic_fetch_add(&s_capture_epoch, 1);
+        atomic_fetch_add(&s_capture_epoch, 2U);
         atomic_store(&s_source, source);
         reset_capture_queue_locked();
     }
@@ -300,7 +308,7 @@ bool voice_audio_take_overflow(void)
 
 bool voice_audio_is_listening(void)
 {
-    if (!atomic_load(&s_listening)) return false;
+    if (!capture_listening()) return false;
     return voice_audio_source() == VOICE_AUDIO_SOURCE_WIFI || !atomic_load(&s_host_muted);
 }
 

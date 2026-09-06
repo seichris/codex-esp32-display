@@ -40,6 +40,10 @@ static bool s_connected;
 static bool s_authenticated;
 static bool s_streaming;
 static bool s_armed;
+static bool s_stopping;
+static bool s_send_in_flight;
+static bool s_have_ack;
+static uint32_t s_last_ack_sequence;
 static bool s_pending_start;
 static bool s_cancel_requested;
 static bool s_failed_session;
@@ -120,7 +124,7 @@ static bool message_session_matches(const cJSON *message, bool require_armed)
         || parsed_generation != s_generation || strcmp(session->valuestring, s_session_id) != 0) {
         return false;
     }
-    return !require_armed || s_armed;
+    return !require_armed || s_armed || s_stopping;
 }
 
 static bool lock_state(TickType_t ticks)
@@ -230,6 +234,8 @@ static void stop_local_stream(void)
     if (lock_state(pdMS_TO_TICKS(20))) {
         s_streaming = false;
         s_armed = false;
+        s_stopping = false;
+        s_send_in_flight = false;
         s_pending_start = false;
         unlock_state();
     }
@@ -242,7 +248,7 @@ static void fail_session(const char *reason)
     ESP_LOGW(TAG, "Wireless session failed: %s", reason == NULL ? "unknown" : reason);
     bool should_cancel_remote = false;
     if (lock_state(pdMS_TO_TICKS(20))) {
-        if (s_streaming || s_armed || s_pending_start) s_failed_session = true;
+        if (s_streaming || s_armed || s_pending_start || s_stopping) s_failed_session = true;
         should_cancel_remote = s_session_id[0] != '\0' && s_generation != 0
             && s_connected && s_authenticated;
         unlock_state();
@@ -339,20 +345,32 @@ static void handle_control_message(const char *data, size_t length)
         if (!message_session_matches(message, false)) {
             cJSON_Delete(message); fail_session("stale armed session"); return;
         }
-        if (lock_state(pdMS_TO_TICKS(20))) {
-            s_armed = true;
-            s_streaming = true;
-            s_next_sequence = 0;
-            s_last_ack_ms = now_ms();
-            unlock_state();
+        if (!lock_state(pdMS_TO_TICKS(20))) {
+            cJSON_Delete(message); fail_session("arm state unavailable"); return;
         }
+        // Retransmitted or late armed replies must never restart PCM or reset
+        // sequence accounting after a local stop/cancel has won.
+        if (s_armed || s_stopping || !s_pending_start || s_cancel_requested || s_failed_session) {
+            unlock_state();
+            cJSON_Delete(message);
+            return;
+        }
+        s_armed = true;
+        s_streaming = true;
+        s_next_sequence = 0;
+        s_have_ack = false;
+        s_last_ack_ms = now_ms();
         voice_audio_set_source(VOICE_AUDIO_SOURCE_WIFI);
         voice_audio_set_listening(true);
+        unlock_state();
     } else if (strcmp(type_text, "listening") == 0) {
         if (!message_session_matches(message, true)) {
             cJSON_Delete(message); fail_session("stale listening session"); return;
         }
-        xEventGroupSetBits(s_events, WIRELESS_EVENT_LISTENING);
+        if (lock_state(pdMS_TO_TICKS(20))) {
+            if (!s_stopping) xEventGroupSetBits(s_events, WIRELESS_EVENT_LISTENING);
+            unlock_state();
+        }
     } else if (strcmp(type_text, "ack") == 0) {
         const cJSON *sequence = cJSON_GetObjectItemCaseSensitive(message, "sequence");
         uint32_t acknowledged_sequence = 0;
@@ -360,11 +378,18 @@ static void handle_control_message(const char *data, size_t length)
             cJSON_Delete(message); fail_session("stale or invalid acknowledgement"); return;
         }
         if (lock_state(pdMS_TO_TICKS(20))) {
-            if (acknowledged_sequence > s_next_sequence) {
+            if (acknowledged_sequence >= s_next_sequence
+                && !(s_send_in_flight && acknowledged_sequence == s_next_sequence)) {
                 unlock_state();
                 cJSON_Delete(message); fail_session("acknowledgement is ahead of audio"); return;
             }
-            s_last_ack_ms = now_ms();
+            // Only forward progress refreshes liveness. Repeated old ACKs
+            // must not keep a stalled receiver alive indefinitely.
+            if (!s_have_ack || acknowledged_sequence > s_last_ack_sequence) {
+                s_have_ack = true;
+                s_last_ack_sequence = acknowledged_sequence;
+                s_last_ack_ms = now_ms();
+            }
             unlock_state();
         }
     } else if (strcmp(type_text, "stopped") == 0) {
@@ -401,7 +426,7 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base, i
     } else if (event_id == WEBSOCKET_EVENT_DISCONNECTED || event_id == WEBSOCKET_EVENT_CLOSED
                || event_id == WEBSOCKET_EVENT_ERROR) {
         if (lock_state(pdMS_TO_TICKS(20))) {
-            if (s_streaming || s_armed || s_pending_start) s_failed_session = true;
+            if (s_streaming || s_armed || s_pending_start || s_stopping) s_failed_session = true;
             s_connected = false;
             s_authenticated = false;
             s_cancel_requested = false;
@@ -413,9 +438,15 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base, i
         xEventGroupSetBits(s_events, WIRELESS_EVENT_FAILED);
     } else if (event_id == WEBSOCKET_EVENT_DATA) {
         const esp_websocket_event_data_t *event = (const esp_websocket_event_data_t *)event_data;
-        if (event == NULL || event->data_ptr == NULL || event->payload_offset != 0 || !event->fin) {
-            fail_session("fragmented control frame");
-        } else if (event->op_code == 0x1) {
+        if (event == NULL) { fail_session("missing WebSocket event"); return; }
+        // ESP-IDF also dispatches payload-free ping/pong/close DATA events.
+        // They are transport controls, not malformed microphone JSON.
+        if (event->op_code == 0x9 || event->op_code == 0xA || event->op_code == 0x8) return;
+        if (event->op_code != 0x1 || event->data_ptr == NULL
+            || event->data_len <= 0 || event->payload_offset != 0 || !event->fin
+            || event->data_len != event->payload_len) {
+            fail_session("incomplete or unsupported control frame");
+        } else {
             handle_control_message(event->data_ptr, (size_t)event->data_len);
         }
     }
@@ -438,7 +469,8 @@ static void stream_task(void *argument)
             vTaskDelay(pdMS_TO_TICKS(5));
             continue;
         }
-        streaming = s_streaming && s_armed && s_connected && s_authenticated;
+        streaming = s_streaming && s_armed && !s_stopping && s_connected && s_authenticated
+            && voice_audio_is_listening();
         sequence = s_next_sequence;
         unlock_state();
         if (!streaming) {
@@ -451,6 +483,14 @@ static void stream_task(void *argument)
         const esp_err_t read_result = voice_audio_wireless_read_frame(
             pcm, sizeof(pcm), &bytes_read
         );
+        // The physical button closes the audio gate before it waits for this
+        // send mutex. A canceled read is therefore a normal stop, not a broken
+        // capture device. Never submit a just-read block after gate closure.
+        if (!voice_audio_is_listening()) {
+            xSemaphoreGive(s_send_lock);
+            vTaskDelay(pdMS_TO_TICKS(5));
+            continue;
+        }
         if (voice_audio_take_overflow()) {
             xSemaphoreGive(s_send_lock);
             fail_session("capture ring overflow");
@@ -469,6 +509,13 @@ static void stream_task(void *argument)
             fail_session("audio framing failed");
             continue;
         }
+        if (!lock_state(pdMS_TO_TICKS(20))) {
+            xSemaphoreGive(s_send_lock);
+            fail_session("send state unavailable");
+            continue;
+        }
+        s_send_in_flight = true;
+        unlock_state();
         if (esp_websocket_client_send_bin(s_client, (const char *)packet, (int)packet_length,
                                           pdMS_TO_TICKS(WIRELESS_SEND_TIMEOUT_MS)) != (int)packet_length) {
             xSemaphoreGive(s_send_lock);
@@ -477,11 +524,15 @@ static void stream_task(void *argument)
         }
         if (lock_state(pdMS_TO_TICKS(20))) {
             s_next_sequence++;
+            s_send_in_flight = false;
             const bool ack_timed_out = s_next_sequence >= 5 && now_ms() - s_last_ack_ms > WIRELESS_ACK_TIMEOUT_MS;
             unlock_state();
             xSemaphoreGive(s_send_lock);
             if (ack_timed_out) fail_session("audio acknowledgement timeout");
-        } else xSemaphoreGive(s_send_lock);
+        } else {
+            xSemaphoreGive(s_send_lock);
+            fail_session("sent frame state unavailable");
+        }
     }
 }
 
@@ -538,7 +589,7 @@ bool wireless_microphone_is_ready(void)
 bool wireless_microphone_has_active_session(void)
 {
     if (!lock_state(0)) return false;
-    const bool active = s_streaming || s_armed || s_pending_start;
+    const bool active = s_streaming || s_armed || s_pending_start || s_stopping;
     unlock_state();
     return active;
 }
@@ -556,10 +607,13 @@ esp_err_t wireless_microphone_start_session(const char *thread_id, const char *r
 {
     if (!s_enabled || thread_id == NULL || request_id == NULL || !wireless_microphone_is_ready()) return ESP_ERR_INVALID_STATE;
     if (!lock_state(pdMS_TO_TICKS(20))) return ESP_ERR_TIMEOUT;
-    if (s_streaming || s_armed || s_pending_start || s_cancel_requested) {
+    if (s_streaming || s_armed || s_pending_start || s_stopping || s_cancel_requested) {
         unlock_state(); return ESP_ERR_INVALID_STATE;
     }
     s_pending_start = true;
+    s_stopping = false;
+    s_send_in_flight = false;
+    s_have_ack = false;
     s_cancel_requested = false;
     s_failed_session = false;
     s_canceled_request_id[0] = '\0';
@@ -588,34 +642,37 @@ esp_err_t wireless_microphone_start_session(const char *thread_id, const char *r
 esp_err_t wireless_microphone_stop_session(void)
 {
     if (!s_enabled || !wireless_microphone_has_active_session()) return ESP_ERR_INVALID_STATE;
-    if (lock_state(pdMS_TO_TICKS(20))) {
-        if (s_pending_start && !s_armed && !s_streaming) {
-            strlcpy(s_canceled_request_id, s_request_id, sizeof(s_canceled_request_id));
-            s_pending_start = false;
-            s_cancel_requested = true;
-            unlock_state();
-            voice_audio_set_listening(false);
-            // If the prepared response has already arrived, cancel it now so
-            // the Mac does not retain a receiver waiting for a commit. If it
-            // has not arrived yet, the prepared handler sends the cancel as
-            // soon as it can validate the server-issued session identity.
-            if (s_session_id[0] != '\0' && send_cancel() != ESP_OK) {
-                fail_session("cancel send failed");
-            }
-            xEventGroupSetBits(s_events, WIRELESS_EVENT_FAILED);
-            return ESP_OK;
-        }
-        unlock_state();
+    if (!lock_state(pdMS_TO_TICKS(20))) {
+        voice_audio_set_listening(false);
+        fail_session("stop state unavailable");
+        return ESP_ERR_TIMEOUT;
     }
+    if (s_stopping) { unlock_state(); return ESP_ERR_INVALID_STATE; }
+    if (s_pending_start && !s_armed && !s_streaming) {
+        strlcpy(s_canceled_request_id, s_request_id, sizeof(s_canceled_request_id));
+        s_pending_start = false;
+        s_cancel_requested = true;
+        unlock_state();
+        voice_audio_set_listening(false);
+        // Cancel now if prepared already arrived; otherwise the prepared
+        // handler will send cancel using the server-issued session identity.
+        if (s_session_id[0] != '\0' && send_cancel() != ESP_OK) {
+            fail_session("cancel send failed");
+        }
+        xEventGroupSetBits(s_events, WIRELESS_EVENT_FAILED);
+        return ESP_OK;
+    }
+    s_stopping = true;
+    unlock_state();
     voice_audio_set_listening(false);
     if (s_send_lock == NULL || xSemaphoreTake(s_send_lock, pdMS_TO_TICKS(WIRELESS_SEND_TIMEOUT_MS)) != pdTRUE) {
-        stop_local_stream();
+        fail_session("stop send lock timeout");
         return ESP_ERR_TIMEOUT;
     }
     uint32_t final_sequence;
     if (!lock_state(pdMS_TO_TICKS(20))) {
         xSemaphoreGive(s_send_lock);
-        stop_local_stream();
+        fail_session("stop state unavailable");
         return ESP_ERR_TIMEOUT;
     }
     s_streaming = false;
@@ -626,7 +683,7 @@ esp_err_t wireless_microphone_stop_session(void)
     cJSON *message = cJSON_CreateObject();
     if (message == NULL) {
         xSemaphoreGive(s_send_lock);
-        stop_local_stream();
+        fail_session("stop allocation failed");
         return ESP_ERR_NO_MEM;
     }
     cJSON_AddStringToObject(message, "type", "stop");
@@ -638,11 +695,14 @@ esp_err_t wireless_microphone_stop_session(void)
     xSemaphoreGive(s_send_lock);
     if (stop_result != ESP_OK) { fail_session("stop send failed"); return ESP_FAIL; }
     const EventBits_t stopped_bits = xEventGroupWaitBits(
-        s_events, WIRELESS_EVENT_STOPPED, pdFALSE, pdFALSE,
+        s_events, WIRELESS_EVENT_STOPPED | WIRELESS_EVENT_FAILED, pdFALSE, pdFALSE,
         pdMS_TO_TICKS(WIRELESS_STOP_DRAIN_MS)
     );
-    stop_local_stream();
-    if ((stopped_bits & WIRELESS_EVENT_STOPPED) != 0) return ESP_OK;
-    fail_session("stop acknowledgement timeout");
+    if ((stopped_bits & WIRELESS_EVENT_STOPPED) != 0
+        && (stopped_bits & WIRELESS_EVENT_FAILED) == 0) {
+        stop_local_stream();
+        return ESP_OK;
+    }
+    fail_session("stop acknowledgement timeout or failure");
     return ESP_ERR_TIMEOUT;
 }
