@@ -56,12 +56,24 @@ final class DictationModel: ObservableObject {
 
     func start(threadId: String) async throws {
         guard UUID(uuidString: threadId) != nil else { throw DictationError.message("Dictation requires a local Codex task ID.") }
-        guard draftText.isEmpty else { throw DictationError.message("Finish or discard the existing dictation first.") }
+        guard !isOpeningDraft else { throw DictationError.message("Wait for the current dictation to finish opening in Codex.") }
+        guard !session.isBusy else { throw DictationError.message("Finish the current dictation before starting another one.") }
         guard ready else { throw DictationError.message("Open Voice Settings and enable Microphone and Speech Recognition, then connect the board by USB.") }
+        // A successful handoff clears this automatically. If a handoff failed,
+        // starting a new device recording is the explicit replacement action now
+        // that the review window has no Discard button.
+        if !draftText.isEmpty || session.phase == .draft || session.phase == .error {
+            session.discard()
+            draftText = ""
+        }
         let id = try session.begin(threadId: threadId)
         handoffMessage = nil
         draftText = ""
-        showWindow()
+        // Keep the editable review window out of the way while the device is
+        // recording. The compact overlay is non-activating and follows the
+        // same centered-bottom placement as FluidVoice.
+        window?.orderOut(nil)
+        DictationRecordingOverlayController.shared.show(model: self)
         onStateChange?()
         do {
             try await recorder.start(id: id) { [weak self] event in
@@ -71,6 +83,8 @@ final class DictationModel: ObservableObject {
             onStateChange?()
         } catch {
             session.fail(id, error.localizedDescription)
+            DictationRecordingOverlayController.shared.hide()
+            showWindow()
             onStateChange?()
             throw DictationError.message(session.error ?? error.localizedDescription)
         }
@@ -89,8 +103,12 @@ final class DictationModel: ObservableObject {
         guard session.id == id else { return }
         let previousPhase = session.phase
         switch event {
-        case .recording: session.recording(id)
-        case .finishing: session.finishing(id)
+        case .recording:
+            session.recording(id)
+            DictationRecordingOverlayController.shared.show(model: self)
+        case .finishing:
+            session.finishing(id)
+            DictationRecordingOverlayController.shared.show(model: self)
         case let .transcript(text, final):
             // Once review begins, late recognition callbacks must not replace
             // the editable draft with the recognizer's older copy.
@@ -101,33 +119,31 @@ final class DictationModel: ObservableObject {
             draftText = session.text
             if final {
                 level = 0
+                DictationRecordingOverlayController.shared.hide()
                 // update rejects terminal callbacks, so only the first completed
                 // transcript opens the original task's composer.
-                if session.phase == .draft { openDraft() }
+                if session.phase == .draft {
+                    openDraft()
+                }
                 else { showWindow() }
             }
-        case let .failed(message): session.fail(id, message); level = 0; showWindow()
+        case let .failed(message):
+            session.fail(id, message)
+            level = 0
+            DictationRecordingOverlayController.shared.hide()
+            showWindow()
         case let .level(value): level = value
         }
         if previousPhase != session.phase { DictationDiagnostics.record(session.phase.rawValue) }
         onStateChange?()
     }
 
-    func discard() {
-        guard !session.isBusy, !isOpeningDraft else { return }
-        recorder.cancel()
-        session.discard()
-        draftText = ""
-        handoffMessage = nil
-        level = 0
-        onStateChange?()
-    }
-
-    func openDraft() {
+    private func openDraft() {
         guard !isOpeningDraft else { return }
         guard !session.isBusy, let threadId = session.threadId,
               let url = DictationDraftLink.url(threadId: threadId, text: draftText) else {
-            handoffMessage = "The draft is empty or too long. Use Copy Text to keep it."
+            handoffMessage = "The automatic Codex handoff could not be prepared."
+            showWindow()
             return
         }
         let sessionId = session.id
@@ -138,24 +154,26 @@ final class DictationModel: ObservableObject {
             do {
                 try await openDraftLink(url)
                 guard session.id == sessionId else { return }
-                handoffMessage = "Draft link opened for the recorded task. Check the text in Codex before sending. This copy is kept until you discard it."
                 DictationDiagnostics.record("draft-link-accepted")
+                // Codex now receives the text automatically. Do not leave a
+                // hidden draft behind that would block the next recording.
+                session.discard()
+                draftText = ""
+                handoffMessage = nil
+                window?.orderOut(nil)
+                onStateChange?()
             } catch {
                 guard session.id == sessionId else { return }
-                handoffMessage = "Codex could not open the draft. Your text is still here."
+                handoffMessage = "Codex could not open the draft automatically. The transcript is still here; start another recording to replace it."
                 DictationDiagnostics.record("draft-link-failed")
                 showWindow()
+                onStateChange?()
             }
         }
     }
 
-    func copyText() {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(draftText, forType: .string)
-        handoffMessage = "Text copied."
-    }
-
     func showWindow() {
+        DictationRecordingOverlayController.shared.hide()
         if window == nil {
             let window = NSWindow(contentViewController: NSHostingController(rootView: DictationReviewView(model: self)))
             window.title = "Device Dictation"
@@ -185,15 +203,8 @@ private struct DictationReviewView: View {
                 .disabled(model.session.isBusy).accessibilityLabel("Dictation text")
             if let error = model.session.error { Text(error).foregroundStyle(.red) }
             if let message = model.handoffMessage { Text(message).font(.caption) }
-            Text("Completed dictation opens automatically in the recorded task's composer, replacing existing text. It never sends a message. This copy stays here until you discard it.")
+            Text("Completed dictation is inserted automatically into the recorded task's Codex composer, replacing existing text. It never sends a message. A failed handoff remains here until you start another recording.")
                 .font(.caption).foregroundStyle(.secondary)
-            HStack {
-                Button("Discard") { model.discard() }.disabled(model.session.isBusy || model.isOpeningDraft)
-                Spacer()
-                Button("Copy Text") { model.copyText() }.disabled(model.draftText.isEmpty)
-                Button("Open as Task Draft") { model.openDraft() }
-                    .disabled(model.session.isBusy || model.draftText.isEmpty || model.isOpeningDraft)
-            }
         }
         .padding(20).frame(minWidth: 560, minHeight: 390)
     }

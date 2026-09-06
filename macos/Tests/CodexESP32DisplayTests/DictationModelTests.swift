@@ -3,7 +3,7 @@ import XCTest
 
 final class DictationModelTests: XCTestCase {
     @MainActor
-    func testCompletedDictationAutomaticallyOpensOriginalTaskOnceAndKeepsCopy() async throws {
+    func testCompletedDictationAutomaticallyOpensOriginalTaskOnceAndClearsLocalDraft() async throws {
         let target = "01a06f9d-249c-7f43-b019-95324c366b8c"
         var session = DictationSession()
         let id = try session.begin(threadId: target)
@@ -23,8 +23,8 @@ final class DictationModelTests: XCTestCase {
         model.handle(id: id, event: .transcript("Late revision", final: true))
 
         XCTAssertEqual(opened, [try XCTUnwrap(DictationDraftLink.url(threadId: target, text: "Keep these words"))])
-        XCTAssertEqual(model.draftText, "Keep these words")
-        XCTAssertEqual(model.session.phase, .draft)
+        XCTAssertTrue(model.draftText.isEmpty)
+        XCTAssertEqual(model.session.phase, .idle)
     }
 
     @MainActor
