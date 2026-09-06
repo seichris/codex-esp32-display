@@ -33,18 +33,27 @@ system default microphone.
 4. Completed dictation automatically opens in the recorded task's composer,
    using its task ID and a percent-encoded `prompt` query in a Codex deep link.
    This replaces any existing composer text; it never sends a message.
-   The companion keeps its copy until **Discard**, with **Copy Text** as a fallback.
-   **Open as Task Draft** can retry the handoff or reopen an edited copy. Failed
-   recognition stays in Device Dictation for review rather than opening automatically.
+   After Codex accepts the handoff, the companion clears its local copy so the
+   next recording can start immediately. Failed recognition or handoff stays in
+   Device Dictation for review rather than opening automatically.
+
+While the device is listening or finishing recognition, the companion shows a
+small non-activating overlay centered near the bottom of the active display.
+It follows the FluidVoice pattern: a dark rounded panel, live input waveform,
+status, and a short tail of the current transcript. The larger Device Dictation
+window appears again when review or an error needs attention.
 
 The exact target is pinned for a recording. Switching targets while recording,
-overwriting a pending draft, and late callbacks from previous recordings are
-rejected. Recording ends after 55 seconds; finalization has a 10-second timeout
+switching tasks during a recording, and late callbacks from previous recordings
+are rejected. A new device recording replaces a prior failed handoff. Recording
+ends after 55 seconds; finalization has a 10-second timeout
 and retains partial text on failure. Empty speech results, including an empty final
 result after stopping, preserve the latest non-empty transcript for review. Late
-callbacks cannot overwrite the editable draft, and starting another recording
-requires discarding any existing text first. The existing firmware uses `VOICE MUTED`
-while the companion finishes transcription and `VOICE READY` when a draft exists.
+callbacks cannot overwrite the editable draft. The existing firmware uses `VOICE MUTED`
+while the companion finishes transcription and `VOICE READY` when the companion is ready.
+On-device Speech can reset its current transcription after a pause without ending
+the request; the companion accumulates those completed partial utterances so one
+long-press session keeps all spoken phrases.
 The updated firmware closes its gate when a fresh companion snapshot reports
 that recording ended or became unavailable, and enforces a 60-second local
 limit even if networking fails. Older firmware still needs the second physical
@@ -53,7 +62,8 @@ press to close the gate after automatic host-side completion.
 The running app with bundle ID `com.openai.codex` is preferred when opening task
 links, because a newer ChatGPT.app and an older Codex.app can coexist. If multiple
 copies are running and none is active, handoff fails rather than guessing.
-URL acceptance is not treated as proof that the composer displayed the text.
+The companion clears its local text once macOS accepts the URL; the public deep-link
+API has no separate acknowledgement that the composer rendered it.
 Manual task selection now follows Codex's local task-presentation events. The
 companion verifies the local broker, tracks exact task IDs per source client,
 reconnects on failures, and clears ambiguous or unavailable selection. Multiple
