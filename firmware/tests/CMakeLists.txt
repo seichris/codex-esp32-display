@@ -26,3 +26,8 @@ add_executable(wireless_microphone_protocol_test
 )
 target_include_directories(wireless_microphone_protocol_test PRIVATE ../main)
 add_test(NAME wireless_microphone_protocol COMMAND wireless_microphone_protocol_test)
+
+# Exercise the real capture implementation without ESP-IDF or hardware.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+add_test(NAME voice_audio_capture
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/run_voice_audio_tests.py")

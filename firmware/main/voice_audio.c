@@ -25,38 +25,53 @@ static const char *TAG = "voice_audio";
 static esp_codec_dev_handle_t s_microphone;
 static QueueHandle_t s_capture_queue;
 static SemaphoreHandle_t s_queue_lock;
+static SemaphoreHandle_t s_frame_ready;
 static SemaphoreHandle_t s_codec_lock;
 static TaskHandle_t s_capture_task;
 static atomic_bool s_listening;
 static atomic_bool s_host_muted;
 static atomic_bool s_capture_overflow;
 static atomic_int s_source;
+static atomic_uint s_capture_epoch;
 static capture_frame_t s_usb_pending;
 static size_t s_usb_pending_offset;
 static bool s_usb_pending_valid;
 
-static void reset_capture_queue(void)
+// Caller owns s_queue_lock. Waking a waiter is also required on stop/source
+// changes so it can recheck the gate rather than wait for nonexistent audio.
+static void reset_capture_queue_locked(void)
 {
-    if (s_capture_queue == NULL || s_queue_lock == NULL) return;
-    if (xSemaphoreTake(s_queue_lock, pdMS_TO_TICKS(20)) == pdTRUE) {
-        xQueueReset(s_capture_queue);
-        s_usb_pending_offset = 0;
-        s_usb_pending_valid = false;
-        xSemaphoreGive(s_queue_lock);
-    }
+    xQueueReset(s_capture_queue);
+    s_usb_pending_offset = 0;
+    s_usb_pending_valid = false;
+    if (s_frame_ready != NULL) xSemaphoreGive(s_frame_ready);
 }
 
-static bool receive_frame(capture_frame_t *frame, TickType_t timeout, voice_audio_source_t source)
+static bool receive_frame(uint8_t *pcm, TickType_t timeout, voice_audio_source_t source)
 {
-    if (frame == NULL || s_capture_queue == NULL || s_queue_lock == NULL) return false;
-    if (xSemaphoreTake(s_queue_lock, timeout) != pdTRUE) return false;
-    if (!atomic_load(&s_listening) || atomic_load(&s_source) != source) {
+    if (pcm == NULL || s_capture_queue == NULL || s_queue_lock == NULL || s_frame_ready == NULL) return false;
+    const TickType_t started = xTaskGetTickCount();
+    const unsigned int epoch = atomic_load(&s_capture_epoch);
+    TickType_t remaining = timeout;
+    while (true) {
+        if (xSemaphoreTake(s_queue_lock, remaining) != pdTRUE) return false;
+        if (!atomic_load(&s_listening) || atomic_load(&s_source) != (int)source
+            || atomic_load(&s_capture_epoch) != epoch) {
+            xSemaphoreGive(s_queue_lock);
+            return false;
+        }
+        const bool received = xQueueReceive(s_capture_queue, pcm, 0) == pdTRUE;
         xSemaphoreGive(s_queue_lock);
-        return false;
+        if (received) return true;
+        const TickType_t elapsed = xTaskGetTickCount() - started;
+        if (elapsed >= timeout) return false;
+        remaining = timeout - elapsed;
+        // Never wait for PCM while holding the mutex needed by the producer.
+        // A binary notification avoids polling and tolerates spurious wakes.
+        if (xSemaphoreTake(s_frame_ready, remaining) != pdTRUE) return false;
+        const TickType_t waited = xTaskGetTickCount() - started;
+        remaining = waited < timeout ? timeout - waited : 0;
     }
-    const bool received = xQueueReceive(s_capture_queue, frame, 0) == pdTRUE;
-    xSemaphoreGive(s_queue_lock);
-    return received;
 }
 
 static void capture_task(void *argument)
@@ -64,32 +79,34 @@ static void capture_task(void *argument)
     (void)argument;
     capture_frame_t frame;
     while (true) {
-        const int source_at_read = atomic_load(&s_source);
         if (s_microphone == NULL || s_codec_lock == NULL
             || xSemaphoreTake(s_codec_lock, portMAX_DELAY) != pdTRUE) {
             vTaskDelay(pdMS_TO_TICKS(5));
             continue;
         }
+        const unsigned int epoch_at_read = atomic_load(&s_capture_epoch);
+        const int source_at_read = atomic_load(&s_source);
+        const bool listening_at_read = atomic_load(&s_listening);
         const int codec_result = esp_codec_dev_read(s_microphone, frame.pcm, (int)sizeof(frame.pcm));
         xSemaphoreGive(s_codec_lock);
         if (codec_result != ESP_CODEC_DEV_OK) {
             vTaskDelay(pdMS_TO_TICKS(5));
             continue;
         }
-        if (!atomic_load(&s_listening)) {
-            reset_capture_queue();
-            continue;
-        }
+        // An in-flight codec read must never cross a gate/session boundary.
+        if (!listening_at_read || !atomic_load(&s_listening)) continue;
         if (s_capture_queue == NULL || s_queue_lock == NULL
             || xSemaphoreTake(s_queue_lock, pdMS_TO_TICKS(20)) != pdTRUE) {
             atomic_store(&s_capture_overflow, true);
             continue;
         }
         const bool still_selected = atomic_load(&s_listening)
-            && atomic_load(&s_source) == source_at_read;
+            && atomic_load(&s_source) == source_at_read
+            && atomic_load(&s_capture_epoch) == epoch_at_read;
         const bool queued = still_selected
             && xQueueSend(s_capture_queue, &frame, 0) == pdTRUE;
         xSemaphoreGive(s_queue_lock);
+        if (queued) xSemaphoreGive(s_frame_ready);
         if (still_selected && !queued) atomic_store(&s_capture_overflow, true);
     }
 }
@@ -137,12 +154,14 @@ esp_err_t voice_audio_init(void)
 
     s_capture_queue = xQueueCreate(CAPTURE_RING_FRAMES, sizeof(capture_frame_t));
     s_queue_lock = xSemaphoreCreateMutex();
+    s_frame_ready = xSemaphoreCreateBinary();
     s_codec_lock = xSemaphoreCreateMutex();
-    if (s_capture_queue == NULL || s_queue_lock == NULL || s_codec_lock == NULL) return ESP_ERR_NO_MEM;
+    if (s_capture_queue == NULL || s_queue_lock == NULL || s_codec_lock == NULL || s_frame_ready == NULL) return ESP_ERR_NO_MEM;
     atomic_store(&s_listening, false);
     atomic_store(&s_host_muted, false);
     atomic_store(&s_capture_overflow, false);
     atomic_store(&s_source, VOICE_AUDIO_SOURCE_USB);
+    atomic_store(&s_capture_epoch, 0);
     s_usb_pending_offset = 0;
     s_usb_pending_valid = false;
     if (xTaskCreate(capture_task, "voice_capture", CAPTURE_TASK_STACK, NULL,
@@ -158,6 +177,7 @@ esp_err_t voice_audio_read(uint8_t *buffer, size_t length, size_t *bytes_read)
 {
     if (buffer == NULL || bytes_read == NULL) return ESP_ERR_INVALID_ARG;
     *bytes_read = length;
+    const unsigned int epoch = atomic_load(&s_capture_epoch);
     if (s_microphone == NULL || !atomic_load(&s_listening)
         || atomic_load(&s_source) != VOICE_AUDIO_SOURCE_USB) {
         memset(buffer, 0, length);
@@ -165,7 +185,7 @@ esp_err_t voice_audio_read(uint8_t *buffer, size_t length, size_t *bytes_read)
     }
 
     if (s_capture_queue == NULL || s_queue_lock == NULL
-        || xSemaphoreTake(s_queue_lock, pdMS_TO_TICKS(20)) != pdTRUE) {
+        || xSemaphoreTake(s_queue_lock, 0) != pdTRUE) {
         memset(buffer, 0, length);
         return ESP_OK;
     }
@@ -191,7 +211,9 @@ esp_err_t voice_audio_read(uint8_t *buffer, size_t length, size_t *bytes_read)
         offset += amount;
     }
     xSemaphoreGive(s_queue_lock);
-    if (atomic_load(&s_host_muted)) memset(buffer, 0, length);
+    if (atomic_load(&s_host_muted) || !atomic_load(&s_listening)
+        || atomic_load(&s_source) != VOICE_AUDIO_SOURCE_USB
+        || atomic_load(&s_capture_epoch) != epoch) memset(buffer, 0, length);
     return ESP_OK;
 }
 
@@ -199,27 +221,50 @@ esp_err_t voice_audio_wireless_read_frame(uint8_t *buffer, size_t length, size_t
 {
     if (buffer == NULL || bytes_read == NULL) return ESP_ERR_INVALID_ARG;
     *bytes_read = 0;
+    const unsigned int epoch = atomic_load(&s_capture_epoch);
     if (length < CAPTURE_FRAME_BYTES || !atomic_load(&s_listening)
         || atomic_load(&s_source) != VOICE_AUDIO_SOURCE_WIFI) {
         if (length > 0) memset(buffer, 0, length < CAPTURE_FRAME_BYTES ? length : CAPTURE_FRAME_BYTES);
         return ESP_ERR_INVALID_STATE;
     }
-    capture_frame_t frame;
-    if (!receive_frame(&frame, pdMS_TO_TICKS(30), VOICE_AUDIO_SOURCE_WIFI)) {
+    // Receive directly into the caller's frame: no extra 1,920-byte stack copy.
+    if (!receive_frame(buffer, pdMS_TO_TICKS(30), VOICE_AUDIO_SOURCE_WIFI)) {
         memset(buffer, 0, CAPTURE_FRAME_BYTES);
-        *bytes_read = CAPTURE_FRAME_BYTES;
         return ESP_ERR_TIMEOUT;
     }
-    memcpy(buffer, frame.pcm, CAPTURE_FRAME_BYTES);
+    if (!atomic_load(&s_listening) || atomic_load(&s_source) != VOICE_AUDIO_SOURCE_WIFI
+        || atomic_load(&s_capture_epoch) != epoch) {
+        memset(buffer, 0, CAPTURE_FRAME_BYTES);
+        return ESP_ERR_INVALID_STATE;
+    }
     *bytes_read = CAPTURE_FRAME_BYTES;
     return ESP_OK;
 }
 
 void voice_audio_set_listening(bool listening)
 {
-    const bool was_listening = atomic_exchange(&s_listening, listening);
-    if (!listening || !was_listening) reset_capture_queue();
-    if (!listening) atomic_store(&s_capture_overflow, false);
+    const unsigned int requested_epoch = atomic_load(&s_capture_epoch);
+    if (!listening) {
+        // Closing the privacy gate must not depend on acquiring a mutex.
+        atomic_store(&s_listening, false);
+        atomic_fetch_add(&s_capture_epoch, 1);
+        atomic_store(&s_capture_overflow, false);
+        if (s_frame_ready != NULL) xSemaphoreGive(s_frame_ready);
+    }
+    if (s_capture_queue == NULL || s_queue_lock == NULL
+        || xSemaphoreTake(s_queue_lock, pdMS_TO_TICKS(20)) != pdTRUE) return;
+    if (listening && atomic_load(&s_capture_epoch) != requested_epoch) {
+        xSemaphoreGive(s_queue_lock);
+        return; // A stop/source change won while this start waited for the lock.
+    }
+    if (!listening || !atomic_load(&s_listening)) {
+        reset_capture_queue_locked();
+        if (listening) {
+            atomic_fetch_add(&s_capture_epoch, 1);
+            atomic_store(&s_listening, true);
+        }
+    }
+    xSemaphoreGive(s_queue_lock);
 }
 
 void voice_audio_set_host_muted(bool muted)
@@ -230,8 +275,17 @@ void voice_audio_set_host_muted(bool muted)
 void voice_audio_set_source(voice_audio_source_t source)
 {
     if (source != VOICE_AUDIO_SOURCE_USB && source != VOICE_AUDIO_SOURCE_WIFI) return;
-    const int previous = atomic_exchange(&s_source, source);
-    if (previous != source) reset_capture_queue();
+    if (s_capture_queue == NULL || s_queue_lock == NULL
+        || xSemaphoreTake(s_queue_lock, pdMS_TO_TICKS(20)) != pdTRUE) {
+        voice_audio_set_listening(false);
+        return;
+    }
+    if (atomic_load(&s_source) != (int)source) {
+        atomic_fetch_add(&s_capture_epoch, 1);
+        atomic_store(&s_source, source);
+        reset_capture_queue_locked();
+    }
+    xSemaphoreGive(s_queue_lock);
 }
 
 voice_audio_source_t voice_audio_source(void)
