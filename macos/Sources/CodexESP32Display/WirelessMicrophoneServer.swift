@@ -278,9 +278,19 @@ final class WirelessMicrophoneServer: @unchecked Sendable {
 
     private let configuration: Configuration
     private let queue = DispatchQueue(label: "codex.wireless-microphone.server")
+    private let queueKey = DispatchSpecificKey<UInt8>()
     private var listener: NWListener?
     private var connection: ConnectionContext?
-    private(set) var state: State = .stopped
+    private var storedState: State = .stopped
+
+    var state: State { onQueue { storedState } }
+
+    // Listener, connection, readiness, and pairing replacement share one
+    // executor. Main-actor callers never race Network.framework callbacks.
+    private func onQueue<T>(_ body: () throws -> T) rethrows -> T {
+        if DispatchQueue.getSpecific(key: queueKey) != nil { return try body() }
+        return try queue.sync(execute: body)
+    }
 
     /// Called after the board's start is accepted and before `prepared` is sent.
     var onStart: (@Sendable (String, UUID) async -> Bool)?
@@ -296,6 +306,7 @@ final class WirelessMicrophoneServer: @unchecked Sendable {
 
     init(configuration: Configuration = Configuration()) {
         self.configuration = configuration
+        queue.setSpecific(key: queueKey, value: 1)
     }
 
     var isReady: Bool {
@@ -303,17 +314,22 @@ final class WirelessMicrophoneServer: @unchecked Sendable {
         return false
     }
 
-    var configurationPairing: WirelessPairing? { configuration.pairingStore.pairing }
+    var configurationPairing: WirelessPairing? { onQueue { configuration.pairingStore.pairing } }
 
     func importPairingBundle(_ data: Data) throws -> WirelessPairing {
-        let pairing = try configuration.pairingStore.importBundle(data)
-        stopAndWait()
-        return pairing
+        try onQueue {
+            // Fail closed before touching identity/credential storage. A
+            // partially failed import must not leave the old listener alive.
+            stopOnQueue()
+            return try configuration.pairingStore.importBundle(data)
+        }
     }
 
     func removePairing() {
-        stopAndWait()
-        configuration.pairingStore.remove()
+        onQueue {
+            stopOnQueue()
+            configuration.pairingStore.remove()
+        }
     }
 
     /// Cancels an in-flight board session when a local UI/legacy command ends
@@ -333,23 +349,25 @@ final class WirelessMicrophoneServer: @unchecked Sendable {
         }
     }
 
-    func start() throws {
+    func start() throws { try onQueue { try startOnQueue() } }
+
+    private func startOnQueue() throws {
         guard listener == nil else { return }
         guard let identity = configuration.pairingStore.serverIdentity(),
               let pairing = configuration.pairingStore.pairing else {
-            state = .failed(WirelessMicrophoneServerError.pairingNotConfigured.description)
+            storedState = .failed(WirelessMicrophoneServerError.pairingNotConfigured.description)
             onStateChange?(state)
             throw WirelessMicrophoneServerError.pairingNotConfigured
         }
         guard let port = NWEndpoint.Port(rawValue: pairing.port) else {
-            state = .failed("invalid listener port")
+            storedState = .failed("invalid listener port")
             onStateChange?(state)
             throw WirelessMicrophoneServerError.listenerUnavailable("invalid port")
         }
 
         let tlsOptions = NWProtocolTLS.Options()
         guard let localIdentity = sec_identity_create(identity) else {
-            state = .failed("could not load the paired TLS identity")
+            storedState = .failed("could not load the paired TLS identity")
             onStateChange?(state)
             throw WirelessMicrophoneServerError.listenerUnavailable("invalid TLS identity")
         }
@@ -372,44 +390,44 @@ final class WirelessMicrophoneServer: @unchecked Sendable {
         let listener: NWListener
         do { listener = try NWListener(using: parameters, on: port) }
         catch {
-            state = .failed(error.localizedDescription)
+            storedState = .failed(error.localizedDescription)
             onStateChange?(state)
             throw WirelessMicrophoneServerError.listenerUnavailable(error.localizedDescription)
         }
         self.listener = listener
-        state = .starting
+        storedState = .starting
         onStateChange?(state)
-        listener.stateUpdateHandler = { [weak self] newState in
-            guard let self else { return }
+        listener.stateUpdateHandler = { [weak self, weak listener] newState in
+            guard let self, let listener else { return }
             self.queue.async {
+                // A canceled previous listener must not reset a replacement's
+                // readiness or discard its reference after a pairing import.
+                guard self.listener === listener else { return }
                 switch newState {
                 case .ready:
-                    self.state = .ready(port: pairing.port)
+                    self.storedState = .ready(port: pairing.port)
                 case let .failed(error):
-                    self.state = .failed(error.localizedDescription)
+                    self.storedState = .failed(error.localizedDescription)
                     self.listener = nil
                 case .cancelled:
-                    self.state = .stopped
+                    self.storedState = .stopped
                 default: break
                 }
                 self.onStateChange?(self.state)
             }
         }
-        listener.newConnectionHandler = { [weak self] connection in
-            self?.queue.async { self?.accept(connection) }
+        listener.newConnectionHandler = { [weak self, weak listener] connection in
+            guard let self else { connection.cancel(); return }
+            self.queue.async {
+                guard let listener, self.listener === listener else { connection.cancel(); return }
+                self.accept(connection)
+            }
         }
         listener.start(queue: queue)
     }
 
     func stop() {
         queue.async { self.stopOnQueue() }
-    }
-
-    /// Stop synchronously when replacing or revoking a pairing. This prevents
-    /// a listener created with the previous TLS identity from surviving the
-    /// import and accepting a board against the new metadata.
-    private func stopAndWait() {
-        queue.sync { self.stopOnQueue() }
     }
 
     private func stopOnQueue() {
@@ -423,7 +441,7 @@ final class WirelessMicrophoneServer: @unchecked Sendable {
         connection = nil
         listener?.cancel()
         listener = nil
-        state = .stopped
+        storedState = .stopped
         onStateChange?(state)
     }
 
@@ -438,18 +456,16 @@ final class WirelessMicrophoneServer: @unchecked Sendable {
             deviceID: pairing.boardID
         )
         self.connection = context
+        // Reserve the single-board slot only for a bounded handshake. Waiting
+        // until .ready to start a timer lets a silent TLS peer occupy it forever.
+        scheduleAuthenticationDeadline(context, after: 10)
         connection.stateUpdateHandler = { [weak self, weak context] newState in
             guard let self, let context else { return }
             self.queue.async {
+                guard self.connection === context else { return }
                 if case .ready = newState {
                     self.startReceiving(context)
-                    let deadline = DispatchWorkItem { [weak self, weak context] in
-                        guard let self, let context, !context.authenticated else { return }
-                        context.connection.cancel()
-                        if self.connection === context { self.connection = nil }
-                    }
-                    context.authDeadline = deadline
-                    self.queue.asyncAfter(deadline: .now() + 3, execute: deadline)
+                    self.scheduleAuthenticationDeadline(context, after: 3)
                 } else if case .failed = newState {
                     self.reportFailureIfNeeded(context, reason: "Wireless microphone connection failed.")
                     if self.connection === context { self.connection = nil }
@@ -460,6 +476,16 @@ final class WirelessMicrophoneServer: @unchecked Sendable {
             }
         }
         connection.start(queue: queue)
+    }
+
+    private func scheduleAuthenticationDeadline(_ context: ConnectionContext, after seconds: Double) {
+        context.authDeadline?.cancel()
+        let deadline = DispatchWorkItem { [weak self, weak context] in
+            guard let self, let context, self.connection === context, !context.authenticated else { return }
+            self.fail(context, "Wireless microphone handshake or authentication timed out.")
+        }
+        context.authDeadline = deadline
+        queue.asyncAfter(deadline: .now() + seconds, execute: deadline)
     }
 
     private func startReceiving(_ context: ConnectionContext) {
@@ -473,7 +499,13 @@ final class WirelessMicrophoneServer: @unchecked Sendable {
                     self.fail(context, "missing WebSocket message metadata"); return
                 }
                 if let data { self.handle(context, data: data, opcode: metadata.opcode, isComplete: isComplete) }
-                else if isComplete { self.fail(context, "empty WebSocket message") }
+                else if isComplete {
+                    if metadata.opcode == .close {
+                        self.fail(context, "Wireless microphone connection closed.")
+                    } else if metadata.opcode == .text || metadata.opcode == .binary {
+                        self.fail(context, "empty WebSocket message")
+                    }
+                }
                 if self.connection === context { self.startReceiving(context) }
             }
         }

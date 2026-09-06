@@ -15,6 +15,7 @@ static int64_t time_us;
 static bool gate;
 static bool close_during_read;
 static bool fail_read;
+static unsigned transient_read_timeouts;
 static bool acknowledge_stop;
 static unsigned binary_sends, cancels;
 static cJSON *fixture;
@@ -82,7 +83,11 @@ bool voice_audio_take_overflow(void) { return false; }
 esp_err_t voice_audio_wireless_read_frame(uint8_t *pcm, size_t n, size_t *bytes) {
     memset(pcm, 0x35, n); *bytes = n;
     if (close_during_read) gate = false;
-    if (close_during_read || fail_read) { *bytes = 0; return ESP_ERR_TIMEOUT; }
+    if (close_during_read || fail_read || transient_read_timeouts) {
+        if (transient_read_timeouts) --transient_read_timeouts;
+        time_us += 30000; // The real capture helper bounds each empty wait.
+        *bytes = 0; return ESP_ERR_TIMEOUT;
+    }
     return ESP_OK;
 }
 bool wireless_microphone_encode_audio_frame(uint8_t *out, size_t cap, const uint8_t id[16], uint32_t seq, uint64_t sample, const uint8_t *pcm, size_t n, size_t *len) {
@@ -90,7 +95,7 @@ bool wireless_microphone_encode_audio_frame(uint8_t *out, size_t cap, const uint
 }
 static void setup(void) {
     lock_count = 0; time_us = 100000; cancels = 0; binary_sends = 0;
-    gate = true; close_during_read = false; fail_read = false; acknowledge_stop = false;
+    gate = true; close_during_read = false; fail_read = false; acknowledge_stop = false; transient_read_timeouts = 0;
     s_connected = true; s_authenticated = true; s_streaming = true; s_armed = true;
     s_pending_start = false; s_cancel_requested = false; s_failed_session = false;
     s_stopping = false; s_send_in_flight = false; s_have_ack = false;
@@ -128,9 +133,13 @@ int main(void) {
     setup(); close_during_read = true; stream_once();
     assert(!s_failed_session && cancels == 0 && binary_sends == 0);
     puts("PASS physical gate closure cancels pending read without failing stop");
-    setup(); fail_read = true; stream_once();
+    setup(); transient_read_timeouts = 1; s_next_sequence = 0; stream_once();
+    assert(binary_sends == 1 && s_next_sequence == 1 && !s_failed_session);
+    puts("PASS discarded pre-arm read may span two periods without aborting startup");
+    setup(); fail_read = true; s_next_sequence = 0; stream_once();
     assert(s_failed_session && !gate && binary_sends == 0);
-    puts("PASS genuine capture timeout still fails closed");
+    assert(time_us > 500000 && time_us <= 530000);
+    puts("PASS missing first PCM fails closed within existing ACK liveness budget");
     setup(); esp_websocket_event_data_t pong = { .op_code = 0xA, .fin = true };
     websocket_event_handler(NULL, NULL, WEBSOCKET_EVENT_DATA, &pong);
     assert(!s_failed_session && gate);

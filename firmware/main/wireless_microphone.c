@@ -496,6 +496,22 @@ static void stream_task(void *argument)
             fail_session("capture ring overflow");
             continue;
         }
+        if (read_result == ESP_ERR_TIMEOUT) {
+            // An empty ring is not a codec failure. The first clean frame can
+            // span two capture periods when a pre-arm codec read is discarded.
+            // Reuse the existing ACK liveness budget instead of fabricating
+            // silence, enlarging the ring, or failing on a single short wait.
+            if (!lock_state(pdMS_TO_TICKS(20))) {
+                xSemaphoreGive(s_send_lock);
+                fail_session("capture state unavailable");
+                continue;
+            }
+            const bool capture_timed_out = now_ms() - s_last_ack_ms > WIRELESS_ACK_TIMEOUT_MS;
+            unlock_state();
+            xSemaphoreGive(s_send_lock);
+            if (capture_timed_out) fail_session("capture liveness timeout");
+            continue;
+        }
         if (read_result != ESP_OK || bytes_read != sizeof(pcm)) {
             xSemaphoreGive(s_send_lock);
             fail_session("capture frame unavailable");
