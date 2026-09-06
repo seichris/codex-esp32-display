@@ -19,3 +19,10 @@ add_test(NAME display_frame COMMAND display_frame_test)
 add_executable(voice_control_test voice_control_test.c ../main/voice_control.c)
 target_include_directories(voice_control_test PRIVATE stubs ../main)
 add_test(NAME voice_control COMMAND voice_control_test)
+
+add_executable(wireless_microphone_protocol_test
+    wireless_microphone_protocol_test.c
+    ../main/wireless_microphone_protocol.c
+)
+target_include_directories(wireless_microphone_protocol_test PRIVATE ../main)
+add_test(NAME wireless_microphone_protocol COMMAND wireless_microphone_protocol_test)

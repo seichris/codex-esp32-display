@@ -1,6 +1,13 @@
 # Wireless microphone implementation plan
 
-Status: proposed; this document does not implement or deploy the feature.
+Status: implemented on branch `wireless-microphone`; physical flashing and
+battery/network qualification remain outstanding.
+
+The implementation preserves this document's protocol, pairing, buffering,
+and failure-boundary decisions. Automated Swift, bridge, shell, and portable C
+protocol checks pass in this branch. The ESP-IDF build and exact-board speech
+acceptance still require the local ESP-IDF toolchain, generated pairing
+material, and an explicitly authorized device test.
 
 ## Baseline checked
 
