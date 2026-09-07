@@ -24,6 +24,16 @@ jobs:
       - working-directory: bridge
         run: npm run check
 
+  provisioning:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install esp-idf-kconfig==2.5.4
+      - run: python scripts/test-wireless-provisioning.py
+
   ui:
     runs-on: ubuntu-latest
     steps:

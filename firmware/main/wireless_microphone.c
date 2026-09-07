@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include "cJSON.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -17,6 +18,9 @@
 #include "sdkconfig.h"
 #include "voice_audio.h"
 #include "wireless_microphone_protocol.h"
+#include "wireless_certificate.h"
+#include "wifi_manager.h"
+#include "mbedtls/x509_crt.h"
 
 #define WIRELESS_EVENT_CONNECTED BIT0
 #define WIRELESS_EVENT_AUTHENTICATED BIT1
@@ -32,6 +36,7 @@
 
 static const char *TAG = "wireless_microphone";
 static esp_websocket_client_handle_t s_client;
+static char *s_certificate_pem;
 static EventGroupHandle_t s_events;
 static SemaphoreHandle_t s_state_lock;
 static SemaphoreHandle_t s_send_lock;
@@ -552,6 +557,23 @@ static void stream_task(void *argument)
     }
 }
 
+static void connection_task(void *argument)
+{
+    (void)argument;
+    // A battery cold boot starts near epoch zero. Keep normal certificate
+    // date validation enabled, and defer TLS until SNTP supplies a clock.
+    while (!wifi_manager_wait_connected(1000) || time(NULL) < 1704067200) {
+        ESP_LOGI(TAG, "Waiting for Wi-Fi and clock synchronization before TLS");
+        vTaskDelay(pdMS_TO_TICKS(5000));
+    }
+    const esp_err_t result = esp_websocket_client_start(s_client);
+    if (result != ESP_OK) {
+        ESP_LOGW(TAG, "Could not start wireless connection: %d", (int)result);
+        xEventGroupSetBits(s_events, WIRELESS_EVENT_FAILED);
+    }
+    vTaskDelete(NULL);
+}
+
 esp_err_t wireless_microphone_init(void)
 {
 #if !CONFIG_CODEX_ATTENTION_WIRELESS_ENABLED
@@ -565,6 +587,22 @@ esp_err_t wireless_microphone_init(void)
         ESP_LOGI(TAG, "Wi-Fi microphone not provisioned; USB remains available");
         return ESP_ERR_INVALID_STATE;
     }
+    const size_t certificate_capacity = strlen(CONFIG_CODEX_ATTENTION_WIRELESS_CA_PEM) + 1;
+    s_certificate_pem = malloc(certificate_capacity);
+    if (s_certificate_pem == NULL) return ESP_ERR_NO_MEM;
+    mbedtls_x509_crt certificate;
+    mbedtls_x509_crt_init(&certificate);
+    const bool valid_certificate = wireless_certificate_decode(CONFIG_CODEX_ATTENTION_WIRELESS_CA_PEM,
+        s_certificate_pem, certificate_capacity)
+        && mbedtls_x509_crt_parse(&certificate, (const unsigned char *)s_certificate_pem,
+            strlen(s_certificate_pem) + 1) == 0;
+    mbedtls_x509_crt_free(&certificate);
+    if (!valid_certificate) {
+        free(s_certificate_pem);
+        s_certificate_pem = NULL;
+        ESP_LOGW(TAG, "Invalid pairing certificate; provision the board again");
+        return ESP_ERR_INVALID_ARG;
+    }
     s_events = xEventGroupCreate();
     s_state_lock = xSemaphoreCreateMutex();
     s_send_lock = xSemaphoreCreateMutex();
@@ -572,7 +610,7 @@ esp_err_t wireless_microphone_init(void)
     const esp_websocket_client_config_t config = {
         .uri = CONFIG_CODEX_ATTENTION_WIRELESS_URL,
         .cert_common_name = CONFIG_CODEX_ATTENTION_WIRELESS_SERVER_NAME,
-        .cert_pem = CONFIG_CODEX_ATTENTION_WIRELESS_CA_PEM,
+        .cert_pem = s_certificate_pem,
         .subprotocol = "codex-microphone.v1",
         .buffer_size = WIRELESS_MICROPHONE_MAX_CONTROL_MESSAGE_LENGTH,
         .task_stack = 6144,
@@ -582,11 +620,11 @@ esp_err_t wireless_microphone_init(void)
     esp_err_t result = esp_websocket_register_events(s_client, WEBSOCKET_EVENT_ANY,
         websocket_event_handler, NULL);
     if (result != ESP_OK) return result;
-    result = esp_websocket_client_start(s_client);
-    if (result != ESP_OK) return result;
-    s_enabled = true;
     if (xTaskCreate(stream_task, "wireless_pcm", WIRELESS_STREAM_STACK, NULL,
                     WIRELESS_STREAM_PRIORITY, NULL) != pdPASS) return ESP_ERR_NO_MEM;
+    if (xTaskCreate(connection_task, "wireless_connect", 4096, NULL,
+                    4, NULL) != pdPASS) return ESP_ERR_NO_MEM;
+    s_enabled = true;
     ESP_LOGI(TAG, "Wi-Fi microphone client started with bounded PCM transport");
     return ESP_OK;
 #endif

@@ -491,7 +491,7 @@ static void update_current_card(void)
     if (!current->available) {
         if (s_snapshot.source_error[0] != '\0') {
             lv_label_set_text(s_current_title, "Bridge data unavailable");
-            lv_label_set_text(s_current_meta, "Check the bridge and Wi-Fi");
+            lv_label_set_text(s_current_meta, s_snapshot.source_error);
         } else if (s_snapshot.desktop_control_availability == ATTENTION_DESKTOP_CONTROL_UNKNOWN) {
             lv_label_set_text(s_current_title, "Controller status unknown");
             lv_label_set_text(s_current_meta, "Check the Mac bridge and companion");
