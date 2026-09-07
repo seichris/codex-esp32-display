@@ -221,7 +221,9 @@ static void poll_task(void *argument)
             previous_success = fetched;
             has_previous_success = true;
         } else {
-            snprintf(
+            if (result == ATTENTION_ERR_UNAUTHORIZED) {
+                strlcpy(current.source_error, "Bridge rejected token (HTTP 401)", sizeof(current.source_error));
+            } else snprintf(
                 current.source_error,
                 sizeof(current.source_error),
                 "Request failed: %s",

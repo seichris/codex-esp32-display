@@ -11,7 +11,7 @@ static inline void test_log(const char *format, ...) { (void)format; }
 #define CONFIG_CODEX_ATTENTION_WIRELESS_ENABLED 1
 #define CONFIG_CODEX_ATTENTION_WIRELESS_URL "wss://test.invalid"
 #define CONFIG_CODEX_ATTENTION_WIRELESS_SERVER_NAME "test.invalid"
-#define CONFIG_CODEX_ATTENTION_WIRELESS_CA_PEM "test certificate"
+#define CONFIG_CODEX_ATTENTION_WIRELESS_CA_PEM "-----BEGIN CERTIFICATE-----\\nfixture\\n-----END CERTIFICATE-----\\n"
 #define CONFIG_CODEX_ATTENTION_WIRELESS_DEVICE_ID "test-board"
 #define CONFIG_CODEX_ATTENTION_WIRELESS_CREDENTIAL "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 typedef uint32_t EventBits_t;
@@ -42,6 +42,7 @@ esp_err_t esp_websocket_client_start(esp_websocket_client_handle_t);
 bool esp_websocket_client_is_connected(esp_websocket_client_handle_t);
 int esp_websocket_client_send_text(esp_websocket_client_handle_t, const char *, int, TickType_t);
 int esp_websocket_client_send_bin(esp_websocket_client_handle_t, const char *, int, TickType_t);
+#undef strlcpy
 size_t strlcpy(char *, const char *, size_t);
 
 // JSON fixtures model parsed fields, not parser behavior. The transport tests
@@ -64,3 +65,10 @@ bool cJSON_IsNumber(const cJSON *);
 bool cJSON_IsObject(const cJSON *);
 cJSON *cJSON_ParseWithLength(const char *, size_t);
 char *cJSON_PrintUnformatted(const cJSON *);
+
+typedef struct { int unused; } mbedtls_x509_crt;
+static inline void mbedtls_x509_crt_init(mbedtls_x509_crt *c) { (void)c; }
+static inline void mbedtls_x509_crt_free(mbedtls_x509_crt *c) { (void)c; }
+static inline int mbedtls_x509_crt_parse(mbedtls_x509_crt *c, const unsigned char *p, size_t n) { (void)c; (void)p; (void)n; return 0; }
+
+static inline void vTaskDelete(TaskHandle_t t) { (void)t; }

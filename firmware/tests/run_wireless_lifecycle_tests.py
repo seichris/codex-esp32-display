@@ -8,7 +8,7 @@ import tempfile
 
 HERE = Path(__file__).resolve().parent
 HEADERS = (
-    "esp_err.h", "esp_log.h", "esp_timer.h", "esp_websocket_client.h", "cJSON.h",
+    "mbedtls/x509_crt.h", "esp_err.h", "esp_log.h", "esp_timer.h", "esp_websocket_client.h", "cJSON.h",
     "freertos/FreeRTOS.h", "freertos/event_groups.h", "freertos/semphr.h",
     "freertos/task.h", "sdkconfig.h",
 )
@@ -25,7 +25,7 @@ def main() -> None:
         command = shlex.split(os.environ.get("CC", "cc")) + [
             "-std=c11", "-Wall", "-Wextra", "-Werror", "-pedantic",
             "-I", str(root), "-I", str(HERE / "wireless_stubs"),
-            str(HERE / "wireless_microphone_lifecycle_test.c"), "-o", str(executable),
+            str(HERE / "wireless_microphone_lifecycle_test.c"), str(HERE / "../main/wireless_certificate.c"), "-o", str(executable),
         ]
         subprocess.run(command, check=True)
         subprocess.run([str(executable)], check=True)
